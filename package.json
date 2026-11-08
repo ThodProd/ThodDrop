@@ -1,7 +1,7 @@
 {
   "name": "thoddrop",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "SEE LICENSE IN LICENSE",
   "description": "ThodDrop — передача файлов и буфера обмена между телефоном и ПК. Основано на Flitdrop (MrFrosas), FSL-1.1-ALv2.",
   "workspaces": [
@@ -17,6 +17,8 @@
   },
   "devDependencies": {
     "@yao-pkg/pkg": "^6.25.0",
-    "sharp": "^0.35.5"
+    "postject": "^1.0.0-alpha.6",
+    "sharp": "^0.35.5",
+    "yazl": "^3.3.1"
   }
 }

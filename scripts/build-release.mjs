@@ -2,13 +2,15 @@
 // ZIP (manifest в корне, пути через /), thodhub-release.json (SHA-256, size).
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
+import { ZipFile } from 'yazl'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.THOD_REPO || 'ThodProd/ThodDrop'
-const notes = process.env.THOD_NOTES || 'Первый выпуск: передача файлов и буфера обмена между телефоном и ПК. Основано на Flitdrop, без платных функций и статистики.'
+const notes = process.env.THOD_NOTES || 'Исправлен запуск worker: подключение телефона по коду и QR снова работает.'
 const version = JSON.parse(readFileSync(path.join(root, 'packages/core/package.json'), 'utf8')).version
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Неверная версия: ' + version)
 
@@ -20,18 +22,55 @@ mkdirSync(pkgDir + '/worker', { recursive: true })
 mkdirSync(src + '/bin', { recursive: true })
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: 'inherit' })
 
-run('npm', ['run', 'build'], path.join(root, 'packages/core'))
-run('node', ['build.mjs'], path.join(root, 'packages/worker'))
+// ZIP с путями через «/» (Windows-архиваторы пишут «\»): yazl нормализует.
+async function makeZip(dir, file) {
+  const zip = new ZipFile()
+  const add = (d, prefix) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name
+      const full = path.join(d, e.name)
+      if (e.isDirectory()) add(full, rel)
+      else if (e.isFile()) zip.addFile(full, rel)
+    }
+  }
+  add(dir, '')
+  zip.end()
+  await pipeline(zip.outputStream, createWriteStream(file))
+}
 
-// worker.exe (Node 22 внутри одного файла; статические файлы — в упаковке)
-cpSync(path.join(root, 'packages/worker/dist/main.cjs'), src + '/bin/worker.cjs')
-cpSync(path.join(root, 'packages/core/public'), src + '/public', { recursive: true })
-writeFileSync(src + '/package.json', JSON.stringify({ name: 'thoddrop-worker', version, bin: 'bin/worker.cjs', pkg: { assets: ['public/**/*'], targets: ['node22-win-x64'] } }))
-run(path.join(root, 'node_modules/.bin/pkg'), ['.', '--out-path', work + '/out', '--compress', 'GZip'], src)
-cpSync(work + '/out/thoddrop-worker.exe', pkgDir + '/worker/ThodDropWorker.exe')
+run(process.execPath, ['build.mjs'], path.join(root, 'packages/core'))
+run(process.execPath, ['build.mjs'], path.join(root, 'packages/worker'))
+
+// worker.exe: Windows — Node SEA (без загрузки base-бинарников и bytecode),
+// другие платформы — прежний pkg.
+const bundle = path.join(root, 'packages/worker/dist/main.cjs')
+if (process.platform === 'win32') {
+  const sea = path.join(work, 'sea')
+  mkdirSync(sea, { recursive: true })
+  const seaConfig = path.join(sea, 'sea-config.json')
+  writeFileSync(seaConfig, JSON.stringify({
+    main: bundle,
+    output: path.join(sea, 'worker.blob'),
+    disableExperimentalSEAWarning: true,
+    useCodeCache: false,
+    useSnapshot: false,
+  }))
+  run(process.execPath, ['--experimental-sea-config', seaConfig], root)
+  cpSync(process.execPath, pkgDir + '/worker/ThodDropWorker.exe')
+  run(process.execPath, [path.join(root, 'node_modules/postject/dist/cli.js'), pkgDir + '/worker/ThodDropWorker.exe',
+    'NODE_SEA_BLOB', path.join(sea, 'worker.blob'), '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'], root)
+  // статические файлы телефона лежат рядом с worker/ (PUBLIC_DIR = ../public)
+  cpSync(path.join(root, 'packages/core/public'), pkgDir + '/public', { recursive: true })
+} else {
+  cpSync(bundle, src + '/bin/worker.cjs')
+  cpSync(path.join(root, 'packages/core/public'), src + '/public', { recursive: true })
+  writeFileSync(src + '/package.json', JSON.stringify({ name: 'thoddrop-worker', version, bin: 'bin/worker.cjs', pkg: { assets: ['public/**/*'], targets: ['node22-win-x64'] } }))
+  run(process.execPath, [path.join(root, 'node_modules/@yao-pkg/pkg/lib-es5/bin.js'), '.', '--out-path', work + '/out', '--compress', 'GZip', '--public-packages', '*', '--public'], src)
+  cpSync(work + '/out/thoddrop-worker.exe', pkgDir + '/worker/ThodDropWorker.exe')
+}
 
 // интерфейс
-run('node', [path.join(root, 'packages/ui/build-ui.mjs'), pkgDir + '/ui'], root)
+run(process.execPath, [path.join(root, 'packages/ui/build-ui.mjs'), pkgDir + '/ui'], root)
 cpSync(path.join(root, 'LICENSE'), pkgDir + '/LICENSE')
 cpSync(path.join(root, 'NOTICE'), pkgDir + '/NOTICE')
 
@@ -47,7 +86,7 @@ const name = `${manifest.id}-${version}-win-x64.zip`
 const out = path.join(work, 'release')
 mkdirSync(out, { recursive: true })
 const zip = path.join(out, name)
-run('zip', ['-r', '-X', '-q', zip, '.'], pkgDir)
+await makeZip(pkgDir, zip)
 
 const buf = readFileSync(zip)
 const release = {
