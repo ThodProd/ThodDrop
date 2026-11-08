@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ThodDrop</title>
+  <link rel="icon" href="/assets/icon.svg">
+  <link rel="stylesheet" href="desktop.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+
+  <aside class="side">
+    <div class="mark" title="ThodDrop"><span></span><b class="mark-name">ThodDrop</b></div>
+    <nav>
+      <button class="nav-btn active" data-view="radar" data-i18n-title="nav.radar" title="Radar">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".45"/><circle cx="12" cy="12" r="5" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".7"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/></svg>
+        <span class="nav-label" data-i18n="nav.radar">Radar</span>
+      </button>
+      <button class="nav-btn" data-view="activity" data-i18n-title="nav.history" title="Historique">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h11M4 18h7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        <span class="nav-label" data-i18n="nav.history">Historique</span>
+      </button>
+      <button class="nav-btn" data-view="send" data-i18n-title="nav.send" title="Envoyer">
+        <svg viewBox="0 0 24 24"><path d="M12 19V6M6 12l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="nav-label" data-i18n="nav.send">Envoyer</span>
+      </button>
+      <button class="nav-btn" data-view="clip" data-i18n-title="nav.clipboard" title="Presse-papiers">
+        <svg viewBox="0 0 24 24"><rect x="6" y="4.5" width="12" height="16" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 4.5a2.5 2.5 0 0 1 5 0M9 10h6M9 13.5h6M9 17h3.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <span class="nav-label" data-i18n="nav.clipboard">Presse-papiers</span>
+      </button>
+      <button class="nav-btn" data-view="settings" data-i18n-title="nav.settings" title="Réglages">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <span class="nav-label" data-i18n="nav.settings">Réglages</span>
+      </button>
+    </nav>
+    <div class="side-foot" id="versionTag">v0.1</div>
+  </aside>
+
+  <main class="main">
+    <header class="head">
+      <div>
+        <h1 id="viewTitle" data-i18n="nav.radar">Radar</h1>
+        <div class="head-sub"><span id="pcNameHead">…</span> · <span id="netInfo">…</span></div>
+      </div>
+      <button class="btn primary" id="btnPair" data-i18n="header.pair">Appairer un téléphone</button>
+    </header>
+
+
+    <!-- Mac : nouvelle version publiée (l'app ne s'installe pas seule tant
+         qu'elle n'est pas notarisée). Discrète, jamais une fenêtre. -->
+    <div class="card consent-card hidden" id="macUpdateCard">
+      <b class="consent-title" data-i18n="macupd.title">Nouvelle version disponible</b>
+      <p class="cardhint" id="macUpdateBody"></p>
+      <div class="consent-actions">
+        <button class="btn" id="btnMacUpdate" data-i18n="macupd.download">Télécharger</button>
+        <button class="btn" id="btnMacUpdateLater" data-i18n="macupd.later">Plus tard</button>
+      </div>
+    </div>
+
+    <!-- Windows : le pare-feu empêche peut-être le téléphone de joindre le PC.
+         Vérifié une fois quand le QR reste 45 s sans téléphone ; « Réparer »
+         demande l'accord de Windows. Une carte, jamais une fenêtre. -->
+    <div class="card consent-card fw-card hidden" id="fwCard">
+      <b class="consent-title fw-title" data-i18n="fw.title">Windows bloque peut-être ton téléphone</b>
+      <p class="cardhint fw-body"></p>
+      <p class="fw-status hidden" aria-live="polite"></p>
+      <div class="consent-actions fw-actions">
+        <button class="btn fw-fix" type="button" data-i18n="fw.fix">Réparer</button>
+        <button class="btn fw-later" type="button" data-i18n="fw.later">Plus tard</button>
+      </div>
+      <small class="consent-note fw-note"></small>
+      <details class="fw-manual">
+        <summary data-i18n="fw.manual">Faire moi-même</summary>
+        <ol class="steps fw-steps"></ol>
+        <button class="btn fw-again" type="button" data-i18n="fw.again">C’est fait, vérifier</button>
+      </details>
+    </div>
+
+    <!-- RADAR -->
+    <section class="view" id="view-radar">
+      <!-- premier envoi guidé : un téléphone appairé, rien encore échangé -->
+      <div class="card guide-card hidden" id="guideCard">
+        <div class="guide-art" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="40" height="40"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="8.8" y="6.5" width="6.4" height="5.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M9.3 11.4l1.9-2 1.4 1.4 0.9-0.9 1.3 1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
+          <svg class="guide-arrow" viewBox="0 0 24 24" width="30" height="30"><path d="M4 12h15M14 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <svg viewBox="0 0 24 24" width="44" height="44"><rect x="3" y="5" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 20h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div class="guide-text">
+          <b class="guide-title" data-i18n="guide.title">Envoie une photo depuis ton téléphone</b>
+          <p class="cardhint" data-i18n="guide.body">Sur le téléphone, touche « Choisir des fichiers » et choisis une photo. Elle arrive ici, dans le dossier ThodDrop.</p>
+        </div>
+      </div>
+      <div class="radar-wrap">
+        <div class="radar" id="radar">
+          <div class="rring rr1"></div>
+          <div class="rring rr2"></div>
+          <div class="rring rr3"></div>
+          <div class="rpulse p1"></div>
+          <div class="rpulse p2"></div>
+          <div class="pcnode">
+            <div class="pcnode-core">
+              <svg viewBox="0 0 24 24" width="22" height="22"><rect x="3" y="5" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9 20h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            </div>
+            <span id="pcNodeName" data-i18n="radar.thisPc">Ce PC</span>
+          </div>
+          <div id="deviceLayer"></div>
+          <div class="radar-empty hidden" id="radarEmpty">
+            <p data-i18n="radar.empty">Aucun téléphone appairé</p>
+            <button class="btn primary" id="btnPair2" data-i18n="header.pair">Appairer un téléphone</button>
+            <small data-i18n="radar.emptyHint">30 secondes, un QR code, et c’est réglé.</small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HISTORIQUE -->
+    <section class="view hidden" id="view-activity">
+      <ul class="hist" id="historyList"></ul>
+      <div class="empty hidden" id="histEmpty">
+        <p data-i18n="hist.empty">Encore rien ici</p>
+        <small data-i18n="hist.emptyHint">Chaque fichier ou texte échangé apparaîtra dans cet historique.</small>
+      </div>
+    </section>
+
+    <!-- ENVOYER -->
+    <section class="view hidden" id="view-send">
+      <!-- plusieurs téléphones : on choisit qui reçoit (caché avec un seul) -->
+      <div class="send-to hidden" id="sendTo">
+        <span class="send-to-label" data-i18n="send.to">Envoyer à</span>
+        <div class="send-to-chips" id="sendToChips" role="radiogroup"></div>
+        <small class="cardhint" data-i18n="send.toHint">Seul le téléphone choisi voit ce que tu envoies depuis ce PC.</small>
+      </div>
+      <div class="send-grid">
+        <div class="card dropzone" id="dropzone">
+          <svg viewBox="0 0 24 24" width="30" height="30"><path d="M12 16V5m-5 4 5-5 5 5M5 19h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <b data-i18n="send.drop">Glisse des fichiers ici</b>
+          <small data-i18n-html="send.dropHint">ou <u>clique pour parcourir</u>. Le téléphone les récupère dans son onglet « Recevoir ».</small>
+          <div class="upbar hidden" id="upBar"><span id="upProgress"></span></div>
+        </div>
+        <div class="card">
+          <h3 data-i18n="send.textTitle">Envoyer du texte</h3>
+          <textarea id="outText" rows="4" data-i18n-ph="send.textPh" placeholder="Un lien, une adresse, un mot de passe wifi…"></textarea>
+          <div class="row">
+            <button class="btn primary" id="btnQueueText" data-i18n="send.textBtn">Mettre à disposition</button>
+            <button class="btn" id="btnPushClip" data-i18n="send.pushClip">Envoyer mon presse-papiers</button>
+          </div>
+        </div>
+      </div>
+      <h3 class="listtitle" data-i18n="send.queueTitle">À récupérer sur le téléphone</h3>
+      <ul class="hist" id="outboxList"></ul>
+      <div class="empty hidden" id="outboxEmpty">
+        <p data-i18n="send.outboxEmpty">Rien en attente</p>
+        <small data-i18n="send.outboxEmptyHint">Tout ce que tu déposes ici reste disponible pour tes téléphones appairés.</small>
+      </div>
+    </section>
+
+    <!-- PRESSE-PAPIERS -->
+    <section class="view hidden" id="view-clip">
+      <div class="clip-toolbar">
+        <input id="clipSearch" type="search" data-i18n-ph="clip.search" placeholder="Rechercher dans l’historique…">
+        <button class="btn" id="btnClipClear" data-i18n="clip.clear">Tout effacer</button>
+      </div>
+      <ul class="hist" id="clipList"></ul>
+      <div class="empty hidden" id="clipEmpty">
+        <p data-i18n="clip.empty">Historique vide</p>
+        <small data-i18n="clip.emptyHint">Ce que tu copies sur ce PC apparaît ici.</small>
+      </div>
+      <div class="empty hidden" id="clipDisabled">
+        <p data-i18n="clip.disabled">Historique désactivé</p>
+        <small data-i18n="clip.disabledHint">Active « Historique du presse-papiers » dans les réglages pour garder ici ce que tu copies.</small>
+      </div>
+    </section>
+
+    <!-- RÉGLAGES -->
+    <section class="view hidden" id="view-settings">
+      <div class="card settings-card">
+        <h3 data-i18n="set.thisPc">Ce PC</h3>
+        <div class="row">
+          <label class="grow"><span data-i18n="set.style">Style</span>
+            <select id="setSkin">
+              <option value="auto" data-i18n="set.auto">Automatique (système)</option>
+              <option value="apple" data-i18n="set.apple">Apple</option>
+              <option value="windows" data-i18n="set.windows">Windows</option>
+            </select>
+          </label>
+          <label class="grow"><span data-i18n="set.theme">Thème</span>
+            <select id="setTheme">
+              <option value="system" data-i18n="set.auto">Automatique (système)</option>
+              <option value="light" data-i18n="set.light">Clair</option>
+              <option value="dark" data-i18n="set.dark">Sombre</option>
+            </select>
+          </label>
+          <label class="grow"><span data-i18n="set.lang">Langue</span>
+            <select id="setLang">
+              <option value="auto" data-i18n="set.auto">Automatique (système)</option>
+              <option value="ru" data-i18n="set.langRu">Русский</option>
+              <option value="en" data-i18n="set.langEn">English</option>
+            </select>
+          </label>
+        </div>
+        <label><span data-i18n="set.name">Nom visible par les téléphones</span>
+          <input id="setName" maxlength="40">
+        </label>
+        <label><span data-i18n="set.dir">Dossier de réception</span>
+          <input id="setDir">
+        </label>
+        <div class="row">
+          <label class="grow"><span data-i18n="set.maxFile">Taille max par fichier</span>
+            <select id="setMax">
+              <option value="512" data-i18n="sz.512mb">512 Mo</option>
+              <option value="1024" data-i18n="sz.1gb">1 Go</option>
+              <option value="4096" data-i18n="sz.4gb">4 Go</option>
+              <option value="8192" data-i18n="sz.8gb">8 Go</option>
+              <option value="16384" data-i18n="sz.16gb">16 Go</option>
+            </select>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="setApproval">
+            <span data-i18n="set.approval">Me demander avant chaque réception</span>
+          </label>
+        </div>
+        <label class="check" id="setClipboardRow">
+          <input type="checkbox" id="setClipboard">
+          <span data-i18n="set.clipboard">Synchroniser mon presse-papiers vers les téléphones (quand je copie du texte sur le PC, il devient disponible sur le téléphone, onglet « Recevoir »)</span>
+        </label>
+        <label class="check" id="setMonthRow">
+          <input type="checkbox" id="setMonthFolders">
+          <span data-i18n="set.monthFolders">Ranger les photos et vidéos du téléphone dans un dossier par mois (AAAA-MM)</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" id="setClipHistory">
+          <span data-i18n="set.clipHistory">Historique du presse-papiers (local uniquement, purgé automatiquement)</span>
+        </label>
+        <!-- appliqué tout de suite (réglage du système), caché hors app de bureau -->
+        <label class="check stat-check hidden" id="setAutostartRow">
+          <input type="checkbox" id="setAutostart">
+          <span><b data-i18n="autostart.label">Lancer ThodDrop à l’ouverture de ma session</b><small data-i18n="set.autostartHint">Ton téléphone retrouve ce PC après un redémarrage. ThodDrop démarre discrètement en arrière-plan, sans fenêtre.</small></span>
+        </label>
+        <div class="host-note hidden" id="loginApproval">
+          <p class="cardhint" data-i18n="login.needsApproval">macOS attend encore ton accord pour lancer ThodDrop à l’ouverture de ta session. Ouvre les réglages et active ThodDrop dans la liste.</p>
+          <button class="btn" id="btnLoginItems" type="button" data-i18n="login.openSettings">Ouvrir les réglages</button>
+        </div>
+        <div class="row">
+          <label class="grow"><span data-i18n="set.keepMax">Garder au maximum</span>
+            <select id="setClipMax">
+              <option value="50" data-i18n="opt.items50">50 éléments</option>
+              <option value="200" data-i18n="opt.items200">200 éléments</option>
+              <option value="500" data-i18n="opt.items500">500 éléments</option>
+            </select>
+          </label>
+          <label class="grow"><span data-i18n="set.eraseAfter">Effacer après</span>
+            <select id="setClipDays">
+              <option value="1" data-i18n="opt.h24">24 heures</option>
+              <option value="7" data-i18n="opt.d7">7 jours</option>
+              <option value="30" data-i18n="opt.d30">30 jours</option>
+            </select>
+          </label>
+        </div>
+        <button class="btn primary" id="btnSaveSettings" data-i18n="set.save">Enregistrer</button>
+      </div>
+
+      <div class="card settings-card">
+        <h3 data-i18n="sc.title">Partage direct depuis l’iPhone (Raccourci)</h3>
+        <p class="cardhint" data-i18n="sc.hint">Avec un Raccourci Apple, « Envoyer au PC » apparaît dans la feuille de partage de l’iPhone : Photos → Partager → Envoyer au PC. Aucune app à installer.</p>
+        <label class="check">
+          <input type="checkbox" id="setShortcuts">
+          <span data-i18n-html="sc.enable">Activer le partage par Raccourci. Pratique, mais ce canal n’est <b>pas chiffré</b> (contrairement au reste) : à désactiver sur un wifi public que tu ne contrôles pas.</span>
+        </label>
+        <label><span data-i18n="sc.device">Téléphone concerné</span>
+          <select id="shortcutDevice"></select>
+        </label>
+        <div id="shortcutInfo"></div>
+        <details>
+          <summary data-i18n="sc.create">Créer le raccourci (2 minutes, à faire une fois)</summary>
+          <ol class="steps">
+            <li data-i18n-html="sc.step1">Sur l’iPhone, ouvre l’app <b>Raccourcis</b> puis crée un nouveau raccourci.</li>
+            <li data-i18n-html="sc.step2">Dans ses réglages (icône ⓘ), active <b>« Afficher dans la feuille de partage »</b>.</li>
+            <li data-i18n-html="sc.step3">Ajoute l’action <b>« Obtenir le contenu de l’URL »</b> avec l’adresse « Envoyer des fichiers » ci-dessus.</li>
+            <li data-i18n-html="sc.step4">Méthode <b>POST</b>, corps <b>Formulaire</b> : ajoute un champ de type <b>Fichier</b>, nommé <code>file</code>, avec la variable <b>Entrée du raccourci</b>.</li>
+            <li data-i18n-html="sc.step5">Nomme-le <b>« Envoyer au PC »</b>, choisis une icône, enregistre.</li>
+            <li data-i18n-html="sc.step6">Depuis Photos ou n’importe quelle app : Partager → Envoyer au PC. Terminé.</li>
+          </ol>
+        </details>
+      </div>
+
+      <div class="card settings-card">
+        <h3 data-i18n="about.title">О программе</h3>
+        <p class="cardhint" data-i18n="about.body">ThodDrop основан на открытом проекте Flitdrop (автор MrFrosas), лицензия FSL-1.1-ALv2. Изменено: удалены платные функции, статистика и любые обращения к интернету. Исходный проект: github.com/MrFrosas/flitdrop</p>
+      </div>
+
+      <div class="card settings-card">
+        <h3 data-i18n="reset.title">Réinitialiser ce PC</h3>
+        <p class="cardhint" data-i18n="reset.hint">Chaque téléphone que tu appaires est lié à CE PC uniquement : personne d’autre sur le wifi ne voit tes données. Si tu prêtes ou revends la machine, réinitialise pour tout effacer : appareils appairés, historique du presse-papiers et fichiers en attente. Les téléphones devront re-scanner un QR code pour se reconnecter.</p>
+        <button class="btn danger" id="btnResetPc" data-i18n="reset.btn">Réinitialiser ce PC</button>
+      </div>
+    </section>
+  </main>
+
+  <aside class="feed">
+    <h2 data-i18n="live.title">En direct</h2>
+    <ul id="feedList"></ul>
+    <div class="empty" id="feedEmpty">
+      <p data-i18n="live.calm">Tout est calme</p>
+      <small data-i18n="live.calmHint">Les réceptions apparaissent ici en temps réel.</small>
+    </div>
+  </aside>
+
+  <!-- Modale d'appairage -->
+  <div class="modal hidden" id="pairModal">
+    <div class="modal-card">
+      <h2 data-i18n="pair.title">Appairer un téléphone</h2>
+      <p class="cardhint" id="pairHint" data-i18n="pair.hint">Scanne ce QR code avec l’appareil photo du téléphone (même wifi que le PC).</p>
+      <div class="pair-scan" id="pairScan">
+        <div class="qrbox"><img id="qrImg" alt=""></div>
+        <div class="pairurl" id="pairUrlText"></div>
+        <!-- le code se renouvelle tout seul tant que cette fenêtre est visible.
+             Le compte à rebours n'est pas lu à voix haute (il change chaque
+             seconde) : seul le renouvellement est annoncé, à part. -->
+        <div class="pair-renew" id="pairRenew"></div>
+        <p class="cardhint" id="pairNoWifi" data-i18n="pair.noWifi">Pas de wifi en commun ? Active le partage de connexion du téléphone, connecte ce PC dessus, puis ferme et rouvre cette fenêtre et scanne le nouveau QR code. Les fichiers vont directement du téléphone au PC, sans passer par Internet.</p>
+        <div class="sr-only" id="pairRenewSr" aria-live="polite"></div>
+      </div>
+      <!-- même carte du pare-feu, là où la personne regarde -->
+      <div class="card consent-card fw-card hidden" id="pairFw">
+        <b class="consent-title fw-title" data-i18n="fw.title">Windows bloque peut-être ton téléphone</b>
+        <p class="cardhint fw-body"></p>
+        <p class="fw-status hidden" aria-live="polite"></p>
+        <div class="consent-actions fw-actions">
+          <button class="btn fw-fix" type="button" data-i18n="fw.fix">Réparer</button>
+        </div>
+        <small class="consent-note fw-note"></small>
+        <details class="fw-manual">
+          <summary data-i18n="fw.manual">Faire moi-même</summary>
+          <ol class="steps fw-steps"></ol>
+          <button class="btn fw-again" type="button" data-i18n="fw.again">C’est fait, vérifier</button>
+        </details>
+      </div>
+      <div class="pairstate" id="pairState"><span class="spin"></span></div>
+      <!-- premier appairage : la prochaine étape, en grand -->
+      <div class="pair-next hidden" id="pairNext">
+        <div class="guide-art" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="40" height="40"><rect x="6.5" y="2.5" width="11" height="19" rx="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="8.8" y="6.5" width="6.4" height="5.6" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M9.3 11.4l1.9-2 1.4 1.4 0.9-0.9 1.3 1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>
+            <svg class="guide-arrow" viewBox="0 0 24 24" width="30" height="30"><path d="M4 12h15M14 7l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg viewBox="0 0 24 24" width="44" height="44"><rect x="3" y="5" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 20h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+        <b class="guide-title" id="pairNextTitle" data-i18n="guide.title">Envoie une photo depuis ton téléphone</b>
+        <p class="cardhint" id="pairNextBody" data-i18n="guide.body">Sur le téléphone, touche « Choisir des fichiers » et choisis une photo. Elle arrive ici, dans le dossier ThodDrop.</p>
+      </div>
+      <div class="row hidden" id="pairRenameRow">
+        <input id="pairRenameInput" maxlength="40" data-i18n-ph="pair.rename" placeholder="Nom de l’appareil">
+        <button class="btn primary" id="btnPairDone" data-i18n="pair.done">Terminer</button>
+      </div>
+      <details class="pair-copy" id="pairCopy">
+        <summary data-i18n="pair.cannotScan">Le téléphone n’arrive pas à scanner ?</summary>
+        <p class="cardhint" data-i18n="pair.copyHint">Copie ce lien et ouvre-le sur le téléphone. Il contient la clé d’appairage : garde-le privé.</p>
+        <button class="btn" id="btnCopyPairLink" data-i18n="pair.copyLink">Copier le lien d’appairage</button>
+      </details>
+      <button class="btn ghost" id="btnPairCancel" data-i18n="pair.cancel">Fermer</button>
+    </div>
+  </div>
+
+  <!-- Bienvenue (premier lancement) -->
+  <div class="modal hidden" id="welcomeModal">
+    <div class="modal-card welcome">
+      <!-- deux colonnes : la présentation à gauche, les choix à droite, pour
+           tenir dans la fenêtre même à sa taille minimale (940 x 620) -->
+      <div class="welcome-intro">
+      <div class="welcome-head">
+        <div class="welcome-art" aria-hidden="true">
+          <div class="wring"></div><div class="wring w2"></div><div class="wcore"></div>
+        </div>
+        <h2 data-i18n="welcome.title">Bienvenue dans ThodDrop</h2>
+      </div>
+      <p class="cardhint" data-i18n="welcome.intro">L’AirDrop de ton PC. Trois choses à savoir, et c’est tout :</p>
+      <ol class="steps welcome-steps">
+        <li data-i18n-html="welcome.step1"><b>Appaire ton téléphone une seule fois.</b> Un QR code à scanner, la connexion est mémorisée, même après un redémarrage.</li>
+        <li data-i18n-html="welcome.step2"><b>Envoie dans les deux sens.</b> Le téléphone envoie photos et textes ; toi, tu glisses des fichiers ici, il les récupère.</li>
+        <li data-i18n-html="welcome.step3"><b>Tout reste chez toi.</b> Chiffré de bout en bout, sur ton wifi, sans cloud ni compte.</li>
+      </ol>
+      </div>
+      <div class="welcome-side">
+      <!-- nouvelle installation : lancement à l'ouverture de session, coché,
+           appliqué seulement quand on continue -->
+      <label class="check stat-check hidden" id="welcomeAutostart">
+        <input type="checkbox" id="welcomeAutostartBox" checked>
+        <span><b data-i18n="autostart.label">Lancer ThodDrop à l’ouverture de ma session</b><small data-i18n="autostart.hint">Ton téléphone retrouve ce PC après un redémarrage. ThodDrop démarre discrètement en arrière-plan, sans fenêtre. Tu peux changer ça dans les réglages.</small></span>
+      </label>
+      <div class="welcome-actions">
+        <button class="btn primary" id="btnWelcome" data-i18n="welcome.start">Appairer mon téléphone</button>
+        <button class="btn ghost" id="btnWelcomeSkip" data-i18n="welcome.skip">Plus tard</button>
+      </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modale appareil -->
+  <div class="modal hidden" id="devModal">
+    <div class="modal-card">
+      <h2 id="devTitle" data-i18n="device.title">Appareil</h2>
+      <p class="cardhint" id="devSeen"></p>
+      <div class="row">
+        <input id="devRenameInput" maxlength="40">
+        <button class="btn primary" id="btnDevRename" data-i18n="device.rename">Renommer</button>
+      </div>
+      <label class="check dev-share">
+        <input type="checkbox" id="devClipShare">
+        <span data-i18n="device.clipShare">Partager le presse-papiers du PC avec ce téléphone</span>
+      </label>
+      <small class="cardhint" data-i18n="device.clipShareHint">Ce téléphone voit alors ce que tu copies sur le PC : l’historique du presse-papiers et, s’il est activé, l’envoi automatique. Laisse-le coupé pour un téléphone qui n’est pas le tien.</small>
+      <button class="btn" id="btnDevShortcut" data-i18n="device.shortcut">Configurer le raccourci iPhone</button>
+      <button class="btn danger" id="btnDevRevoke" data-i18n="device.revoke">Retirer cet appareil</button>
+      <button class="btn ghost" id="btnDevClose" data-i18n="common.close">Fermer</button>
+    </div>
+  </div>
+
+  <!-- Modale validation -->
+  <div class="modal hidden" id="apprModal">
+    <div class="modal-card">
+      <h2 data-i18n="appr.title">Réception entrante</h2>
+      <p id="apprText"></p>
+      <div class="row">
+        <button class="btn primary grow" id="btnAccept" data-i18n="appr.accept">Accepter</button>
+        <button class="btn danger grow" id="btnRefuse" data-i18n="appr.decline">Refuser</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dropoverlay hidden" id="dropOverlay"><div data-i18n="send.dropOverlay">Dépose pour mettre à disposition du téléphone</div></div>
+  <div id="toasts"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

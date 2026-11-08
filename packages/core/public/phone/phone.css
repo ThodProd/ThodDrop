@@ -1,0 +1,341 @@
+/* Flitdrop : page téléphone. L'apparence s'adapte au système du téléphone.
+   Apple (iOS/iPadOS) : SF Pro, verre dépoli neutre, ressorts, clair/sombre auto.
+   Android : Roboto, Material 3, surfaces neutres. Détecté via data-os sur <html>. */
+
+/* ---------- Apple (défaut) : palette iOS NEUTRE (plus de bleu « gamer ») ---------- */
+:root {
+  color-scheme: light dark;
+  --blue: light-dark(#007aff, #0a84ff);
+  --blue-press: light-dark(#0060df, #409cff);
+  --on-accent: #ffffff;
+  --ok: light-dark(#34c759, #30d158);
+  --danger: light-dark(#ff3b30, #ff453a);
+  --radius-card: 20px;
+  --radius-ctl: 14px;
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+
+  /* iOS : gris système clair, VRAI noir + gris neutres en sombre (aucun bleu) */
+  --bg-a: light-dark(#f2f2f7, #000000);
+  --bg-b: light-dark(#e9e9ee, #1c1c1e);
+  --text: light-dark(#000000, #ffffff);
+  --muted: light-dark(#8a8a8e, #98989e);
+  --glass: light-dark(rgba(255, 255, 255, 0.62), rgba(44, 44, 46, 0.55));
+  --glass-strong: light-dark(rgba(255, 255, 255, 0.84), rgba(54, 54, 58, 0.74));
+  --hair: light-dark(rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0.1));
+  --hair-line: light-dark(rgba(60, 60, 67, 0.13), rgba(84, 84, 88, 0.4));
+  --shadow: light-dark(0 10px 40px rgba(20, 30, 60, 0.1), 0 12px 44px rgba(0, 0, 0, 0.5));
+  --field: light-dark(rgba(255, 255, 255, 0.72), rgba(118, 118, 128, 0.24));
+  --seg: light-dark(rgba(120, 120, 128, 0.12), rgba(120, 120, 128, 0.32));
+}
+
+/* ---------- Android : Material 3 (Roboto, surfaces neutres, formes Material) ---------- */
+html[data-os='android'] {
+  --blue: light-dark(#0b57d0, #a8c7fa);
+  --blue-press: light-dark(#0842a0, #d3e3fd);
+  --on-accent: light-dark(#ffffff, #062e6f);
+  --ok: light-dark(#146c2e, #6dd58c);
+  --danger: light-dark(#b3261e, #f2b8b5);
+  --radius-card: 16px;
+  --radius-ctl: 20px;
+  --font: 'Roboto', 'Google Sans Text', system-ui, sans-serif;
+
+  --bg-a: light-dark(#f5f2f7, #141218);
+  --bg-b: light-dark(#eceaf0, #1d1b20);
+  --text: light-dark(#1d1b20, #e6e0e9);
+  --muted: light-dark(#49454f, #cac4d0);
+  --glass: light-dark(#ffffff, #211f26);
+  --glass-strong: light-dark(#ffffff, #2b2930);
+  --hair: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.09));
+  --hair-line: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.12));
+  --shadow: light-dark(0 2px 6px rgba(0, 0, 0, 0.15), 0 2px 6px rgba(0, 0, 0, 0.5));
+  --field: light-dark(#f3edf7, #2b2930);
+  --seg: light-dark(#e7e0ec, #322f37);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; }
+body {
+  background: linear-gradient(180deg, var(--bg-a) 0%, var(--bg-b) 100%);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 17px;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+/* Android : Material réduit le crénage serré et le verre translucide */
+html[data-os='android'] body { letter-spacing: 0; }
+html[data-os='android'] .bigsend, html[data-os='android'] .qitem,
+html[data-os='android'] .modal-card, html[data-os='android'] .iconbtn { backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* le grain d'antan est retiré : le verre doit rester net */
+.noise { display: none; }
+.hidden { display: none !important; }
+
+.screen {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 18px calc(env(safe-area-inset-bottom, 0px) + 22px);
+  max-width: 540px;
+  margin: 0 auto;
+  animation: sheet 0.55s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+@keyframes sheet { from { opacity: 0; transform: translateY(16px) scale(0.99); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .screen, .panel, .qitem, .modal-card, .toast { animation: none !important; } }
+
+/* ---------- écrans scan / erreur ---------- */
+#screen-scan, #screen-error { justify-content: center; text-align: center; gap: 20px; }
+.brand {
+  font-weight: 700; font-size: 21px; letter-spacing: -0.02em;
+  display: inline-flex; align-items: center; gap: 9px; justify-content: center;
+}
+.brand-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent); }
+.brand-dot.off { background: var(--danger); box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 18%, transparent); }
+
+.scan-art { position: relative; width: 168px; height: 168px; margin: 6px auto; }
+.ring { position: absolute; inset: 0; border: 1.5px solid color-mix(in srgb, var(--blue) 40%, transparent); border-radius: 50%; animation: sonar 3s ease-out infinite; }
+.ring.r2 { animation-delay: 1s; }
+.ring.r3 { animation-delay: 2s; }
+@keyframes sonar { 0% { transform: scale(0.3); opacity: 0.85; } 100% { transform: scale(1.04); opacity: 0; } }
+.core { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 24px color-mix(in srgb, var(--blue) 60%, transparent); }
+@media (prefers-reduced-motion: reduce) { .ring { animation: none; opacity: 0.3; transform: scale(0.7); } }
+
+h1 { font-weight: 700; font-size: 27px; line-height: 1.2; letter-spacing: -0.02em; text-wrap: balance; }
+.lead { color: var(--muted); font-size: 16px; max-width: 32ch; margin: 0 auto; }
+
+/* ---------- écran principal : barre de nav + grand titre iOS 26 ---------- */
+.topbar { display: block; margin-bottom: 18px; padding: 0 1px; }
+.nav-row { display: flex; align-items: center; justify-content: space-between; min-height: 40px; }
+.nav-title { font-weight: 590; font-size: 17px; letter-spacing: -0.02em; color: var(--text); }
+.large-title { font-weight: 700; font-size: 34px; line-height: 1.08; letter-spacing: -0.035em; margin-top: 4px; }
+.conn { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent); flex: none; }
+.dot.off { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent); }
+.conn .pc-name { font-weight: 400; font-size: 15px; letter-spacing: -0.01em; color: var(--muted); }
+.iconbtn {
+  width: 34px; height: 34px; border-radius: 50%; border: 0.5px solid var(--hair);
+  background: var(--glass); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
+  color: var(--text); display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: transform 0.15s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.iconbtn:active { transform: scale(0.9); }
+
+/* segmented control iOS 26 (piste dépolie, pastille flottante en verre) */
+.tabs { display: flex; gap: 0; background: var(--seg); border-radius: 11px; padding: 2px; margin-bottom: 20px; }
+.tab {
+  flex: 1; padding: 8px 6px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--text); font: 510 14px var(--font); letter-spacing: -0.01em; cursor: pointer;
+  transition: color 0.2s ease, background 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  position: relative;
+}
+/* fins séparateurs entre segments inactifs, effacés autour de la pastille active */
+.tab:not(.active) + .tab:not(.active)::before {
+  content: ''; position: absolute; left: 0; top: 22%; bottom: 22%; width: 1px;
+  background: var(--hair-line);
+}
+.tab.active {
+  background: var(--glass-strong); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  color: var(--text); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 3px 8px rgba(0, 0, 0, 0.06);
+}
+.tab:active { transform: scale(0.96); }
+.badge { background: var(--blue); color: var(--on-accent); font-size: 11.5px; font-weight: 700; border-radius: 999px; padding: 1px 7px; min-width: 18px; }
+
+/* Android : entête Material (barre d'app + titre medium), segmented arrondi */
+html[data-os='android'] .large-title { font-size: 24px; font-weight: 500; letter-spacing: 0; margin-top: 2px; }
+html[data-os='android'] .nav-title { font-weight: 500; }
+html[data-os='android'] .tabs { border-radius: var(--radius-ctl); }
+html[data-os='android'] .tab { border-radius: calc(var(--radius-ctl) - 2px); }
+html[data-os='android'] .tab.active { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2); }
+
+.panel { display: flex; flex-direction: column; gap: 13px; animation: fade 0.3s ease both; }
+@keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* carte d'envoi, gros bouton verre */
+.bigsend {
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; gap: 9px;
+  padding: 40px 24px; border-radius: 26px; cursor: pointer;
+  border: 0.5px solid var(--hair);
+  background: var(--glass); backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+  color: var(--text); text-align: center; box-shadow: var(--shadow);
+  transition: transform 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.bigsend:active { transform: scale(0.98); }
+.bigsend > svg {
+  color: var(--blue); box-sizing: border-box;
+  width: 60px; height: 60px; padding: 14px; border-radius: 19px;
+  background: color-mix(in srgb, var(--blue) 13%, transparent);
+}
+html[data-os='android'] .bigsend > svg { border-radius: 16px; background: color-mix(in srgb, var(--blue) 16%, transparent); }
+.bigsend b { font-weight: 650; font-size: 19px; letter-spacing: -0.02em; }
+.bigsend small { color: var(--muted); font-size: 14px; max-width: 30ch; }
+.bigsend-halo { position: absolute; left: 50%; top: 34px; width: 92px; height: 92px; margin-left: -46px; border-radius: 22px; border: 1.5px solid color-mix(in srgb, var(--blue) 34%, transparent); animation: sonar 2.6s ease-out infinite; pointer-events: none; }
+
+.send-summary { font-size: 14px; color: var(--muted); text-align: center; }
+.send-summary b { color: var(--blue); }
+
+.queue { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.qitem {
+  border: 0.5px solid var(--hair); background: var(--glass); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-radius: var(--radius-card); padding: 14px 15px; display: flex; flex-direction: column; gap: 9px;
+  box-shadow: var(--shadow); animation: fade 0.3s ease both;
+}
+.qhead { display: flex; align-items: center; gap: 11px; }
+.qicon { width: 34px; height: 34px; flex: none; border-radius: 10px; background: color-mix(in srgb, var(--blue) 14%, transparent); color: var(--blue); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+.qname { font-weight: 600; font-size: 15px; word-break: break-word; flex: 1; letter-spacing: -0.01em; }
+.qsize { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.qbar { height: 6px; border-radius: 999px; background: var(--seg); overflow: hidden; }
+.qbar span { display: block; height: 100%; width: 0%; border-radius: 999px; background: var(--blue); transition: width 0.25s ease; }
+.qstate { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.qitem.done { border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+.qitem.done .qstate { color: var(--ok); font-weight: 600; }
+.qitem.err { border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.qitem.err .qstate { color: var(--danger); }
+/* limite du jour du PC (Flitdrop Pro, version gratuite) : calme, aplats */
+.qitem.wait .qstate { color: var(--muted); }
+.limit-note {
+  border: 0.5px solid var(--hair-line); background: var(--glass-strong); border-radius: var(--radius-card);
+  padding: 14px 15px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.45;
+}
+.limit-note .limit-wait { color: var(--muted); font-size: 13px; }
+.qbtn { border: 0.5px solid var(--hair); background: var(--glass-strong); color: var(--blue); border-radius: 999px; padding: 8px 15px; font: 600 13.5px var(--font); cursor: pointer; }
+
+/* texte */
+textarea {
+  width: 100%; resize: vertical; min-height: 150px;
+  background: var(--field); border: 0.5px solid var(--hair); border-radius: var(--radius-card);
+  color: var(--text); font: 400 17px var(--font); padding: 15px 16px; outline: none;
+  backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+}
+textarea:focus { border-color: color-mix(in srgb, var(--blue) 55%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 12%, transparent); }
+.txt-meta { display: flex; justify-content: flex-end; color: var(--muted); font-size: 12.5px; margin-top: -4px; }
+
+.btn {
+  border: 0.5px solid transparent; border-radius: 999px; padding: 15px 20px;
+  font: 650 16.5px var(--font); letter-spacing: -0.01em; cursor: pointer;
+  transition: transform 0.15s cubic-bezier(0.32, 0.72, 0, 1), background 0.2s;
+  background: var(--glass-strong); color: var(--blue); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+}
+.btn:active { transform: scale(0.97); }
+.btn.primary { background: var(--blue); color: var(--on-accent); box-shadow: 0 8px 24px color-mix(in srgb, var(--blue) 35%, transparent); }
+.btn.primary:active { background: var(--blue-press); }
+/* Android : les boutons Material n'ont pas d'ombre colorée */
+html[data-os='android'] .btn.primary { box-shadow: none; }
+html[data-os='android'] .btn { border-radius: var(--radius-ctl); }
+.btn.ghost { background: transparent; border-color: var(--hair-line); color: var(--text); }
+.btn.danger { background: color-mix(in srgb, var(--danger) 12%, transparent); border-color: color-mix(in srgb, var(--danger) 30%, transparent); color: var(--danger); }
+.btn.wide { width: 100%; }
+.btn[disabled] { opacity: 0.5; pointer-events: none; }
+.hint { color: var(--muted); font-size: 13.5px; text-align: center; }
+.alt-hosts { display: flex; flex-direction: column; gap: 9px; }
+a.btn { text-decoration: none; display: block; text-align: center; }
+
+.empty { text-align: center; padding: 42px 12px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; }
+.empty p:first-child { font-weight: 650; font-size: 17px; color: var(--text); }
+.rtext { font-size: 15px; color: var(--text); background: var(--field); border-radius: 12px; padding: 11px 13px; white-space: pre-wrap; word-break: break-word; max-height: 130px; overflow: auto; }
+
+/* toast + modales (feuilles iOS) */
+.toast {
+  position: fixed; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  transform: translateX(-50%); z-index: 60;
+  background: var(--glass-strong); backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 0.5px solid var(--hair); border-radius: 16px;
+  padding: 13px 20px; font-size: 15px; font-weight: 600; box-shadow: var(--shadow);
+  animation: toastup 0.35s cubic-bezier(0.32, 0.72, 0, 1) both; max-width: 90vw; text-align: center;
+}
+@keyframes toastup { from { opacity: 0; transform: translate(-50%, 14px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.modal { position: fixed; inset: 0; z-index: 50; background: rgba(10, 14, 22, 0.32); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: flex-end; justify-content: center; padding: 12px; }
+.modal-card {
+  width: 100%; max-width: 480px;
+  background: var(--glass-strong); backdrop-filter: blur(40px) saturate(180%); -webkit-backdrop-filter: blur(40px) saturate(180%);
+  border: 0.5px solid var(--hair); border-radius: 26px; padding: 22px;
+  display: flex; flex-direction: column; gap: 13px;
+  animation: sheetup 0.4s cubic-bezier(0.32, 0.72, 0, 1) both;
+  margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 4px);
+  box-shadow: 0 -4px 60px rgba(10, 20, 40, 0.25);
+}
+@keyframes sheetup { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.modal-card::before { content: ''; width: 38px; height: 5px; border-radius: 3px; background: var(--hair-line); align-self: center; margin-bottom: 4px; }
+.modal-card h2 { font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+.modal-card img { width: 100%; border-radius: 16px; max-height: 55vh; object-fit: contain; background: rgba(0, 0, 0, 0.04); }
+
+/* ---------- thème forcé (menu : Clair / Sombre) ---------- */
+html[data-theme='light'] { color-scheme: light; }
+html[data-theme='dark'] { color-scheme: dark; }
+
+/* ---------- 4 onglets : légèrement resserrés pour tenir « Historique » ---------- */
+.tab { font-size: 13px; padding: 8px 4px; letter-spacing: -0.02em; }
+
+/* ---------- historique du presse-papiers : miniatures d'images ---------- */
+.clip-thumb-img {
+  width: 46px; height: 46px; flex: none; border-radius: 10px; object-fit: cover;
+  border: 0.5px solid var(--hair); cursor: pointer;
+  background: repeating-conic-gradient(var(--seg) 0% 25%, transparent 0% 50%) 50% / 14px 14px;
+}
+
+/* ---------- bannière « ajouter à l'écran d'accueil » ---------- */
+.install-banner {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+  padding: 12px 12px 12px 14px; border-radius: 16px;
+  background: var(--glass); border: 0.5px solid var(--hair);
+  backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: var(--shadow);
+  animation: fade 0.3s ease both;
+}
+html[data-os='android'] .install-banner { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.ib-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.ib-text b { font-weight: 650; font-size: 14.5px; letter-spacing: -0.01em; }
+.ib-text span { color: var(--muted); font-size: 12.5px; }
+.ib-add { flex: none; border: 0; border-radius: 999px; background: var(--blue); color: var(--on-accent); font: 650 13.5px var(--font); padding: 8px 15px; cursor: pointer; }
+.ib-close { flex: none; width: 30px; height: 30px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); font-size: 15px; cursor: pointer; }
+
+/* ---------- menu : champs style / thème ---------- */
+.menu-row { display: flex; gap: 10px; }
+.menu-field { flex: 1; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.menu-field select {
+  width: 100%; appearance: none; -webkit-appearance: none;
+  background: var(--field); border: 0.5px solid var(--hair); border-radius: var(--radius-ctl);
+  color: var(--text); font: 500 15px var(--font); padding: 11px 12px; outline: none;
+}
+
+/* ---------- écran scan : collage manuel du lien d'appairage ---------- */
+.scan-paste { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 340px; margin: 4px auto 0; }
+.scan-paste input {
+  width: 100%; background: var(--field); border: 0.5px solid var(--hair); border-radius: var(--radius-ctl);
+  color: var(--text); font: 400 15px var(--font); padding: 13px 14px; outline: none;
+}
+.scan-paste input:focus { border-color: color-mix(in srgb, var(--blue) 55%, transparent); }
+
+/* juste après le premier appairage : le bouton d'envoi est mis en avant une
+   seule fois (trois pulsations d'un anneau uni, puis plus rien) */
+.bigsend.hint { animation: sendhint 1.2s ease-in-out 3; }
+@keyframes sendhint {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--blue) 0%, transparent); }
+  50% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--blue) 38%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { .bigsend.hint { animation: none; outline: 3px solid var(--blue); outline-offset: 3px; } }
+
+/* test de vitesse et conseil « mode Isolement » */
+.slow-hint { margin: 10px 4px 0; }
+.speed-result { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; font-size: 15px; line-height: 1.4; text-align: left; }
+.speed-result:empty { display: none; }
+.speed-result p { margin: 0; }
+.speed-result p.verdict { font-weight: 600; }
+
+/* Sans flou derrière les panneaux (réglage iOS « Réduire la transparence »,
+   navigateur qui ne sait pas flouter) : fonds opaques, sinon le texte de la
+   page passait à travers la feuille du menu et la rendait illisible. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .modal-card, .install-banner { background: light-dark(#ffffff, #2c2c2e); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .modal-card, .install-banner { background: light-dark(#ffffff, #2c2c2e); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}

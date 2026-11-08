@@ -1,0 +1,92 @@
+// Petites règles du premier usage, partagées par les pages du PC et du
+// téléphone. Sans DOM, pour être testées (test/onboarding.test.ts).
+
+// ---------- code d'appairage (page du PC) ----------
+
+/** Le code est remplacé 30 s avant d'expirer : un téléphone qui scanne au
+ *  dernier moment a encore le temps de finir avec l'ancien. */
+export const PAIR_RENEW_BEFORE_MS = 30_000
+
+/** Où en est le code affiché : à remplacer maintenant, ou dans combien de
+ *  temps (ms). */
+export function pairCodeState(now: number, expiresAt: number): { renewNow: boolean; renewInMs: number } {
+  const renewInMs = expiresAt - PAIR_RENEW_BEFORE_MS - now
+  return renewInMs <= 0 ? { renewNow: true, renewInMs: 0 } : { renewNow: false, renewInMs }
+}
+
+/** Compte à rebours « 2:05 » (minutes:secondes, arrondi à la seconde du
+ *  dessus pour ne jamais afficher 0:00 avant l'heure). */
+export function fmtCountdown(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+// ---------- erreur de connexion (page du téléphone) ----------
+
+export type ConnectError = 'expired' | 'revoked' | 'wrongPc' | 'notFound'
+
+/** Message à montrer quand le premier échange avec le PC échoue.
+ *  `fresh` : la page vient d'arriver avec un code d'appairage neuf (QR scanné
+ *  ou lien collé) que ce téléphone n'avait pas encore. Un PC redémarré a
+ *  oublié ses codes expirés : un code neuf refusé est alors aussi un code
+ *  expiré, sauf depuis l'icône de l'écran d'accueil (appairage déjà fait). */
+export function connectError(o: { status?: number; code?: string; fresh: boolean; standalone: boolean }): ConnectError {
+  if (o.code === 'pairingExpired') return 'expired'
+  if (o.status === 409) return 'wrongPc'
+  if (o.status === 403) return o.code === 'deviceUnknown' && o.fresh && !o.standalone ? 'expired' : 'revoked'
+  return 'notFound'
+}
+
+/** « Code expiré » : l'appairage d'avant (texte gardé tel quel avant le scan)
+ *  redevient celui du téléphone, en mémoire comme dans le stockage, pour que
+ *  « Réessayer » reparte avec lui et non avec le code expiré. Sans appairage
+ *  d'avant valable, il n'y a rien à réessayer : retour à l'écran de scan. */
+export function afterExpiredCode<T extends { id: string; keyB64: string }>(previous: string | null): { pairing: T | null; retry: 'connect' | 'scan' } {
+  let pairing: T | null = null
+  try {
+    const v = JSON.parse(previous || 'null') as Partial<T> | null
+    if (v && typeof v.id === 'string' && v.id && typeof v.keyB64 === 'string' && v.keyB64) pairing = v as T
+  } catch {
+    pairing = null
+  }
+  return { pairing, retry: pairing ? 'connect' : 'scan' }
+}
+
+// ---------- icône d'écran d'accueil (page du téléphone) ----------
+
+/** L'icône n'est proposée qu'après un premier transfert réussi, jamais dans
+ *  l'app déjà installée, et plus après « ✕ ». */
+export function shouldSuggestInstall(o: { standalone: boolean; dismissed: boolean; firstTransferDone: boolean }): boolean {
+  return !o.standalone && !o.dismissed && o.firstTransferDone
+}
+
+// ---------- pare-feu de Windows (page du PC) ----------
+
+/** Une seule vérification par ouverture de la fenêtre d'appairage, après
+ *  45 s de QR visible (fenêtre réduite ou cachée : le temps ne compte pas),
+ *  tant qu'aucun téléphone n'est appairé, et seulement sous Windows (l'app
+ *  de bureau fournit la vérification). */
+export function firewallCheckDue(o: { visibleMs: number; asked: boolean; paired: boolean; available: boolean; afterMs: number }): boolean {
+  return o.available && !o.asked && !o.paired && o.visibleMs >= o.afterMs
+}
+
+/** Temps de QR visible ajouté à chaque battement du compte à rebours (une
+ *  fois par seconde). Un battement très en retard (PC en veille, onglet
+ *  gelé) ne compte que pour 2 s. */
+export function addVisibleMs(visibleMs: number, lastTick: number, now: number): number {
+  if (!(lastTick > 0) || now <= lastTick) return visibleMs
+  return visibleMs + Math.min(now - lastTick, 2000)
+}
+
+// ---------- pare-feu de Windows (carte du PC) ----------
+
+/** Étapes « Faire moi-même » de la carte du pare-feu, en clés de traduction.
+ *  Wifi public : le passer en réseau privé. Règle : l'autoriser dans
+ *  « Applications autorisées », en l'y ajoutant d'abord s'il n'y est pas.
+ *  « Tout bloquer » : le décocher. Pare-feu géré : demander à qui le gère. */
+export function firewallStepKeys(problem: 'public' | 'rule' | null, blocker: 'blockAll' | 'managed' | null, noRule: boolean): string[] {
+  if (problem === 'public') return ['fw.pub.step1', 'fw.pub.step2', 'fw.pub.step3']
+  if (blocker === 'managed') return ['fw.managed.step1']
+  if (blocker === 'blockAll') return ['fw.rule.step1', 'fw.block.step2', 'fw.block.step3']
+  return ['fw.rule.step1', 'fw.rule.step2', noRule ? 'fw.rule.step3add' : 'fw.rule.step3']
+}
