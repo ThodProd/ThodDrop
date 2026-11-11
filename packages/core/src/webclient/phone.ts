@@ -1,8 +1,9 @@
 import { b64uToBytes, seal, sealJSON, openJSON, open, jti } from './wdcrypto.js'
+import jsQR from 'jsqr'
 import { t as tr, tp, rtf, fmtBytes, resolveLang, langFrom, type Lang } from '../i18n.js'
 import { applyI18n } from '../i18n-dom.js'
 import { KeyedNodes, VersionedList, reconcile } from './lists.js'
-import { afterExpiredCode, connectError, shouldSuggestInstall } from './onboarding.js'
+import { afterExpiredCode, connectError, shouldSuggestInstall, parsePairToken } from './onboarding.js'
 import { CryptoPool, CryptoAuthError, CryptoPoolError, type WorkerLike } from './cryptopool.js'
 import { SpeedMeter, progressText } from './speed.js'
 import { speedVerdict } from './speedverdict.js'
@@ -241,8 +242,8 @@ function updateManifestForPairing() {
   if (!pair) return
   const frag = `${pair.id}.${pair.keyB64}${pair.instanceId ? '.' + pair.instanceId : ''}`
   const manifest = {
-    name: 'Flitdrop',
-    short_name: 'Flitdrop',
+    name: 'ThodDrop',
+    short_name: 'ThodDrop',
     id: '/s/',
     start_url: `${location.origin}/s/#${frag}`,
     scope: `${location.origin}/s/`,
@@ -261,15 +262,183 @@ function updateManifestForPairing() {
 
 // ---------- appairage ----------
 
-/** Décode un token d'appairage « id.cléB64[.instanceId] » (clé et instanceId
- *  restent dans le fragment/local, jamais envoyés en clair au réseau). */
-function parseToken(raw: string): Pairing | null {
-  const parts = (raw || '').trim().replace(/^#/, '').split('.')
-  const [id, keyB64, instanceId] = parts
-  if (id && keyB64 && id.length >= 8 && keyB64.length >= 40) {
-    return instanceId ? { id, keyB64, instanceId } : { id, keyB64 }
+/** Jeton d'appairage (voir onboarding.ts) : on garde le nom court ici. */
+const parseToken = (raw: string): Pairing | null => parsePairToken(raw)
+
+// ---------- scan du QR d'appairage (caméra intégrée à la PWA) ----------
+//
+// L'icône de l'écran d'accueil n'a pas d'appareil photo système : on ouvre
+// donc la caméra ici, dans l'app. jsQR décode l'image hors ligne ; si la
+// caméra live n'est pas disponible (iOS ancien, permission refusée), on peut
+// prendre une photo du QR avec l'appareil photo du téléphone.
+
+let qrStream: MediaStream | null = null
+let qrTimer: number | null = null
+let qrDecoding = false
+let qrCanvas: HTMLCanvasElement | null = null
+let qrLastBad = 0
+
+function qrStateText(text: string): void {
+  $('qrState').textContent = text
+}
+
+function pauseQrCamera(): void {
+  if (qrTimer) {
+    clearInterval(qrTimer)
+    qrTimer = null
   }
-  return null
+  qrDecoding = false
+  if (qrStream) {
+    for (const track of qrStream.getTracks()) track.stop()
+    qrStream = null
+  }
+  const video = $('qrVideo') as HTMLVideoElement | null
+  if (video) {
+    video.pause()
+    video.srcObject = null
+  }
+}
+
+function stopQrStream(): void {
+  pauseQrCamera()
+  const view = document.getElementById('qrView')
+  if (view) view.classList.add('no-camera')
+  const sheet = document.getElementById('qrSheet')
+  if (sheet) sheet.classList.add('no-camera')
+}
+
+function stopQrScanner(): void {
+  stopQrStream()
+  $('qrSheet').classList.add('hidden')
+}
+
+async function decodeQrSource(source: CanvasImageSource, width: number, height: number): Promise<string | null> {
+  if (!width || !height) return null
+  const scale = Math.min(1, 720 / Math.max(width, height))
+  const cw = Math.max(1, Math.round(width * scale))
+  const ch = Math.max(1, Math.round(height * scale))
+  qrCanvas ??= document.createElement('canvas')
+  qrCanvas.width = cw
+  qrCanvas.height = ch
+  const ctx = qrCanvas.getContext('2d', { willReadFrequently: true })
+  if (!ctx) return null
+  ctx.drawImage(source, 0, 0, cw, ch)
+  const image = ctx.getImageData(0, 0, cw, ch)
+  return jsQR(image.data, cw, ch, { inversionAttempts: 'attemptBoth' })?.data ?? null
+}
+
+function applyPairing(p: Pairing): void {
+  pair = p
+  notePairingSource(p)
+  localStorage.setItem(PAIR_KEY, JSON.stringify(p))
+  key = b64uToBytes(p.keyB64)
+  show('scan')
+  void connect()
+}
+
+function acceptQrText(text: string): void {
+  const p = parseToken(text)
+  if (!p) {
+    // QR d'un autre type : on le dit sans arrêter la caméra.
+    const now = Date.now()
+    if (now - qrLastBad > 2500) {
+      qrLastBad = now
+      qrStateText(t('ph.scan.badQr'))
+    }
+    return
+  }
+  stopQrScanner()
+  applyPairing(p)
+}
+
+function qrTick(): void {
+  if (qrDecoding || !qrStream) return
+  const video = $('qrVideo') as HTMLVideoElement
+  if (video.readyState < 2 || !video.videoWidth) return
+  qrDecoding = true
+  void decodeQrSource(video, video.videoWidth, video.videoHeight)
+    .then((text) => {
+      if (text) acceptQrText(text)
+    })
+    .catch(() => {})
+    .finally(() => {
+      qrDecoding = false
+    })
+}
+
+async function startQrCamera(): Promise<void> {
+  const media = navigator.mediaDevices
+  if (!media?.getUserMedia) {
+    $('qrView').classList.add('no-camera')
+    $('qrSheet').classList.add('no-camera')
+    qrStateText(t('ph.scan.cameraFail'))
+    return
+  }
+  try {
+    qrStream = await media.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 1280 } },
+    })
+    const video = $('qrVideo') as HTMLVideoElement
+    video.srcObject = qrStream
+    await video.play().catch(() => {})
+    $('qrView').classList.remove('no-camera')
+    $('qrSheet').classList.remove('no-camera')
+    qrStateText(t('ph.scan.hint'))
+    if (qrTimer) clearInterval(qrTimer)
+    qrTimer = window.setInterval(qrTick, 280)
+  } catch {
+    // permission refusée ou caméra occupée : la photo reste possible
+    $('qrView').classList.add('no-camera')
+    $('qrSheet').classList.add('no-camera')
+    qrStateText(t('ph.scan.cameraFail'))
+  }
+}
+
+function openQrScanner(): void {
+  qrLastBad = 0
+  $('qrView').classList.remove('no-camera')
+  $('qrSheet').classList.remove('no-camera')
+  $('qrSheet').classList.remove('hidden')
+  qrStateText(t('ph.scan.starting'))
+  void startQrCamera()
+}
+
+async function scanQrPhoto(file: File): Promise<void> {
+  qrStateText(t('ph.scan.reading'))
+  let bitmap: ImageBitmap | null = null
+  if (typeof createImageBitmap === 'function') {
+    try {
+      bitmap = await createImageBitmap(file)
+    } catch {
+      bitmap = null
+    }
+  }
+  let text: string | null = null
+  if (bitmap) {
+    text = await decodeQrSource(bitmap, bitmap.width, bitmap.height).catch(() => null)
+    bitmap.close()
+  } else {
+    const url = URL.createObjectURL(file)
+    try {
+      const img = new Image()
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error('image'))
+        img.src = url
+      })
+      text = await decodeQrSource(img, img.naturalWidth, img.naturalHeight)
+    } catch {
+      text = null
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  }
+  if (text) {
+    acceptQrText(text)
+    return
+  }
+  qrStateText(t('ph.scan.noQrPhoto'))
 }
 
 function loadPairing(): Pairing | null {
@@ -421,13 +590,8 @@ async function pollKnock(): Promise<void> {
         clearKnock()
         knockBusy = false
         knockButtons(false)
-        pair = p
-        notePairingSource(p)
-        localStorage.setItem(PAIR_KEY, JSON.stringify(p))
-        key = b64uToBytes(p.keyB64)
         knockStateText(t('ph.knock.approved'))
-        show('scan')
-        void connect()
+        applyPairing(p)
         return
       }
     }
@@ -1609,12 +1773,20 @@ function initUI() {
       toast(t('ph.paste.invalid'))
       return
     }
-    pair = p
-    notePairingSource(p)
-    localStorage.setItem(PAIR_KEY, JSON.stringify(p))
-    key = b64uToBytes(p.keyB64)
-    show('scan')
-    void connect()
+    applyPairing(p)
+  }
+  $('btnScanQr').onclick = openQrScanner
+  $('qrClose').onclick = stopQrScanner
+  const qrPhotoInput = $('qrPhoto') as unknown as HTMLInputElement
+  $('btnQrPhoto').onclick = () => {
+    // libère la caméra live avant d'ouvrir l'appareil photo système
+    stopQrStream()
+    qrPhotoInput.click()
+  }
+  qrPhotoInput.onchange = () => {
+    const file = qrPhotoInput.files?.[0]
+    qrPhotoInput.value = ''
+    if (file) void scanQrPhoto(file)
   }
   $('btnKnock').onclick = () => void startKnock()
   $('btnCloseImg').onclick = () => {
@@ -1625,7 +1797,18 @@ function initUI() {
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && hello) void pollOutbox()
+    // La caméra est relâchée dès que l'app passe en arrière-plan. On garde la
+    // feuille ouverte : sur iPhone, prendre la photo de secours ouvre
+    // l'appareil photo système et ferait disparaître le scanner.
+    if (document.hidden) {
+      pauseQrCamera()
+      return
+    }
+    if (hello) void pollOutbox()
+    const sheet = document.getElementById('qrSheet')
+    if (sheet && !sheet.classList.contains('hidden') && !sheet.classList.contains('no-camera')) {
+      void startQrCamera()
+    }
   })
 
   // Android (Chrome) : on garde la proposition d'installation pour le bouton

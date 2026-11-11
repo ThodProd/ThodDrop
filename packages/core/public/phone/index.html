@@ -27,10 +27,16 @@
     </div>
     <h1 data-i18n="ph.scan.title">Connecte ce téléphone à ton PC</h1>
     <p class="lead" data-i18n="ph.scan.lead">Ouvre ThodDrop sur le PC, clique sur « Appairer un téléphone » et scanne le QR code avec l’appareil photo.</p>
+    <div class="scan-actions">
+      <button class="btn primary wide scan-btn" id="btnScanQr">
+        <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true"><path d="M4 9V6a2 2 0 0 1 2-2h3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M8.5 12h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span data-i18n="ph.scan.btn">Сканировать QR-код</span>
+      </button>
+    </div>
     <div id="scanPaste" class="scan-paste hidden">
-      <p class="hint" data-i18n="ph.paste.hint">Depuis l’écran d’accueil, tu ne peux pas scanner. Sur le PC, ouvre « Appairer un téléphone » &gt; « Copier le lien d’appairage », puis colle-le ici :</p>
-      <input id="pastePairInput" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" data-i18n-ph="ph.paste.placeholder" placeholder="Colle le lien d’appairage">
-      <button class="btn primary wide" id="btnPastePair" data-i18n="ph.paste.btn">Se connecter</button>
+      <p class="hint" data-i18n="ph.paste.hint">Камера недоступна? На ПК откройте «Подключить телефон» &gt; «Скопировать ссылку подключения» и вставьте её сюда:</p>
+      <input id="pastePairInput" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" data-i18n-ph="ph.paste.placeholder" placeholder="Вставьте ссылку подключения">
+      <button class="btn primary wide" id="btnPastePair" data-i18n="ph.paste.btn">Подключить</button>
     </div>
     <div id="scanKnock" class="scan-paste">
       <p class="hint" data-i18n="ph.knock.hint">Нет QR-кода? Запросите доступ — на ПК нужно будет подтвердить.</p>
@@ -185,6 +191,20 @@
       <h2 data-i18n="ph.installSheet.title">ThodDrop comme une app</h2>
       <p class="hint" id="installSteps"></p>
       <button class="btn ghost wide" id="installClose" data-i18n="common.close">Fermer</button>
+    </div>
+  </div>
+
+  <div id="qrSheet" class="modal qr-sheet hidden">
+    <div class="modal-card qr-card">
+      <h2 data-i18n="ph.scan.sheetTitle">Наведите камеру на QR-код</h2>
+      <div class="qr-view" id="qrView">
+        <video id="qrVideo" playsinline muted autoplay aria-label="QR"></video>
+        <div class="qr-frame" aria-hidden="true"></div>
+        <p class="qr-state" id="qrState" aria-live="polite"></p>
+      </div>
+      <input type="file" id="qrPhoto" accept="image/*" capture="environment" hidden>
+      <button class="btn ghost wide" id="btnQrPhoto" data-i18n="ph.scan.photo">Снять фото QR-кода</button>
+      <button class="btn ghost wide" id="qrClose" data-i18n="common.close">Закрыть</button>
     </div>
   </div>
 

@@ -78,10 +78,12 @@ html[data-os='android'] .modal-card, html[data-os='android'] .iconbtn { backdrop
 .hidden { display: none !important; }
 
 .screen {
+  width: 100%;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: calc(env(safe-area-inset-top, 0px) + 16px) 18px calc(env(safe-area-inset-bottom, 0px) + 22px);
+  padding: calc(env(safe-area-inset-top, 0px) + clamp(12px, 3.6vw, 18px)) clamp(14px, 4.2vw, 20px)
+    calc(env(safe-area-inset-bottom, 0px) + clamp(16px, 4vw, 22px));
   max-width: 540px;
   margin: 0 auto;
   animation: sheet 0.55s cubic-bezier(0.32, 0.72, 0, 1) both;
@@ -106,14 +108,14 @@ html[data-os='android'] .modal-card, html[data-os='android'] .iconbtn { backdrop
 .core { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 24px color-mix(in srgb, var(--blue) 60%, transparent); }
 @media (prefers-reduced-motion: reduce) { .ring { animation: none; opacity: 0.3; transform: scale(0.7); } }
 
-h1 { font-weight: 700; font-size: 27px; line-height: 1.2; letter-spacing: -0.02em; text-wrap: balance; }
-.lead { color: var(--muted); font-size: 16px; max-width: 32ch; margin: 0 auto; }
+h1 { font-weight: 700; font-size: clamp(23px, 7vw, 27px); line-height: 1.2; letter-spacing: -0.02em; text-wrap: balance; }
+.lead { color: var(--muted); font-size: clamp(15px, 4.2vw, 16px); max-width: 32ch; margin: 0 auto; }
 
 /* ---------- écran principal : barre de nav + grand titre iOS 26 ---------- */
 .topbar { display: block; margin-bottom: 18px; padding: 0 1px; }
 .nav-row { display: flex; align-items: center; justify-content: space-between; min-height: 40px; }
 .nav-title { font-weight: 590; font-size: 17px; letter-spacing: -0.02em; color: var(--text); }
-.large-title { font-weight: 700; font-size: 34px; line-height: 1.08; letter-spacing: -0.035em; margin-top: 4px; }
+.large-title { font-weight: 700; font-size: clamp(28px, 9vw, 34px); line-height: 1.08; letter-spacing: -0.035em; margin-top: 4px; }
 .conn { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 16%, transparent); flex: none; }
 .dot.off { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 16%, transparent); }
@@ -252,11 +254,11 @@ a.btn { text-decoration: none; display: block; text-align: center; }
   animation: toastup 0.35s cubic-bezier(0.32, 0.72, 0, 1) both; max-width: 90vw; text-align: center;
 }
 @keyframes toastup { from { opacity: 0; transform: translate(-50%, 14px); } to { opacity: 1; transform: translate(-50%, 0); } }
-.modal { position: fixed; inset: 0; z-index: 50; background: rgba(10, 14, 22, 0.32); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: flex-end; justify-content: center; padding: 12px; }
+.modal { position: fixed; inset: 0; z-index: 50; background: rgba(10, 14, 22, 0.32); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: flex-end; justify-content: center; padding: 12px; overflow-y: auto; overscroll-behavior: contain; }
 .modal-card {
-  width: 100%; max-width: 480px;
+  width: 100%; max-width: min(480px, 100%); max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain;
   background: var(--glass-strong); backdrop-filter: blur(40px) saturate(180%); -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border: 0.5px solid var(--hair); border-radius: 26px; padding: 22px;
+  border: 0.5px solid var(--hair); border-radius: 26px; padding: clamp(16px, 4.6vw, 22px);
   display: flex; flex-direction: column; gap: 13px;
   animation: sheetup 0.4s cubic-bezier(0.32, 0.72, 0, 1) both;
   margin-bottom: calc(env(safe-area-inset-bottom, 0px) + 4px);
@@ -307,13 +309,53 @@ html[data-os='android'] .install-banner { backdrop-filter: none; -webkit-backdro
 }
 
 /* ---------- écran scan : collage manuel du lien d'appairage ---------- */
-.scan-paste { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 340px; margin: 4px auto 0; }
+.scan-actions { width: 100%; max-width: 340px; margin: 2px auto 0; }
+.scan-btn { display: flex; align-items: center; justify-content: center; gap: 9px; }
+.scan-btn svg { flex: none; }
+.scan-paste { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: min(340px, 100%); margin: 4px auto 0; }
 .scan-paste input {
   width: 100%; background: var(--field); border: 0.5px solid var(--hair); border-radius: var(--radius-ctl);
   color: var(--text); font: 400 15px var(--font); padding: 13px 14px; outline: none;
 }
 .scan-paste input:focus { border-color: color-mix(in srgb, var(--blue) 55%, transparent); }
 .scan-paste .field-label { color: var(--muted); font-size: 13px; text-align: left; margin-bottom: -6px; }
+
+/* ---------- scanner QR intégré (caméra de la PWA) ---------- */
+.qr-sheet { align-items: center; padding: clamp(10px, 3vw, 18px); }
+.qr-card { max-width: min(420px, 100%); padding: clamp(15px, 4.5vw, 22px); }
+.qr-card .qr-view { width: min(100%, 46dvh); margin: 0 auto; }
+.qr-view {
+  position: relative; width: 100%; aspect-ratio: 1 / 1; overflow: hidden;
+  border-radius: 22px; background: #0a0e15; display: flex; align-items: center; justify-content: center;
+}
+.qr-view video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.qr-frame {
+  position: absolute; inset: 12%; border-radius: 20px; pointer-events: none;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 999px rgba(6, 10, 16, 0.34), 0 0 22px rgba(255, 255, 255, 0.16) inset;
+}
+.qr-frame::before, .qr-frame::after {
+  content: ''; position: absolute; width: 28px; height: 28px; border: 3px solid #2bd3be;
+}
+.qr-frame::before { left: -2px; top: -2px; border-right: 0; border-bottom: 0; border-radius: 16px 0 0 0; }
+.qr-frame::after { right: -2px; bottom: -2px; border-left: 0; border-top: 0; border-radius: 0 0 16px 0; }
+.qr-state {
+  position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 2;
+  color: #fff; font-size: 13px; line-height: 1.35; text-align: center;
+  background: rgba(8, 12, 20, 0.58); border: 0.5px solid rgba(255, 255, 255, 0.16);
+  border-radius: 11px; padding: 7px 10px;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+}
+.qr-view.no-camera { aspect-ratio: auto; min-height: 148px; padding: 20px 16px; background: var(--field); }
+.qr-view.no-camera video, .qr-view.no-camera .qr-frame { display: none; }
+.qr-view.no-camera .qr-state {
+  position: static; width: 100%; color: var(--muted); background: transparent; border: 0;
+  font-size: 14px; padding: 0; backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.qr-sheet.no-camera #btnQrPhoto {
+  background: var(--blue); color: var(--on-accent); border-color: transparent;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--blue) 35%, transparent);
+}
 
 /* juste après le premier appairage : le bouton d'envoi est mis en avant une
    seule fois (trois pulsations d'un anneau uni, puis plus rien) */
@@ -339,4 +381,35 @@ html[data-os='android'] .install-banner { backdrop-filter: none; -webkit-backdro
 }
 @media (prefers-reduced-transparency: reduce) {
   .modal-card, .install-banner { background: light-dark(#ffffff, #2c2c2e); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+
+/* ---------- adaptation aux écrans étroits et aux petites hauteurs ---------- */
+img, video, canvas { max-width: 100%; }
+.toast { max-width: min(92vw, 460px); overflow-wrap: anywhere; }
+.qhead, .qname, .rtext { min-width: 0; }
+.qname { overflow-wrap: anywhere; }
+.menu-row { flex-wrap: wrap; }
+.menu-field { min-width: min(140px, 100%); }
+.scan-paste { max-width: min(340px, 100%); }
+#imgPreview { max-width: 100%; }
+
+@media (max-width: 380px) {
+  .tabs { margin-bottom: 16px; }
+  .tab { font-size: 12px; padding: 8px 2px; gap: 3px; }
+  .bigsend { padding: 32px 18px; border-radius: 22px; }
+  .bigsend > svg { width: 52px; height: 52px; padding: 12px; }
+  .bigsend b { font-size: 17px; }
+  .scan-art { width: 140px; height: 140px; }
+  .menu-row { flex-direction: column; }
+  .modal-card { padding: 18px; border-radius: 22px; }
+  .toast { font-size: 14px; padding: 11px 15px; }
+  .qr-card { gap: 10px; }
+  .btn { padding: 14px 16px; font-size: 16px; }
+}
+
+@media (max-height: 640px) {
+  #screen-scan, #screen-error { justify-content: flex-start; gap: 14px; }
+  .scan-art { width: 112px; height: 112px; margin: 0 auto; }
+  .lead { font-size: 15px; }
+  .qr-card .qr-view { width: min(100%, 40dvh); }
 }

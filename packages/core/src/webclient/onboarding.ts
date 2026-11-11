@@ -21,6 +21,39 @@ export function fmtCountdown(ms: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
+// ---------- jeton d'appairage (page du téléphone) ----------
+
+export interface PairToken {
+  id: string
+  keyB64: string
+  instanceId?: string
+}
+
+/** Décode un jeton d'appairage « id.cléB64[.instanceId] ». Accepte aussi la
+ *  forme complète d'un lien, celle que renvoie le QR ou la demande d'accès :
+ *  http://PC:port/s/#id.clé[.pc] (ou l'ancien ?k=). Le jeton reste dans le
+ *  fragment : il n'est jamais envoyé au réseau. */
+export function parsePairToken(raw: string): PairToken | null {
+  let token = (raw || '').trim()
+  if (!token) return null
+  if (/^https?:\/\//i.test(token)) {
+    try {
+      const url = new URL(token)
+      token = url.hash.replace(/^#/, '') || url.searchParams.get('k') || ''
+    } catch {
+      return null
+    }
+  }
+  const hash = token.indexOf('#')
+  if (hash >= 0) token = token.slice(hash + 1)
+  token = token.replace(/^#/, '')
+  const [id, keyB64, instanceId] = token.split('.')
+  if (id && keyB64 && id.length >= 8 && keyB64.length >= 40) {
+    return instanceId ? { id, keyB64, instanceId } : { id, keyB64 }
+  }
+  return null
+}
+
 // ---------- erreur de connexion (page du téléphone) ----------
 
 export type ConnectError = 'expired' | 'revoked' | 'wrongPc' | 'notFound'
