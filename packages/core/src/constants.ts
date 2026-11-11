@@ -5,6 +5,10 @@ declare const __FLITDROP_VERSION__: string | undefined
 export const VERSION: string = typeof __FLITDROP_VERSION__ !== 'undefined' ? __FLITDROP_VERSION__ : '0.0.0-dev'
 export const PROTOCOL_TAG = 'wd1'
 export const DEFAULT_PORT = 47777
+// Быстрый приём: маленький агент слушает статическую LAN-ссылку, а worker
+// запускается по запросу на соседнем порту, чтобы не мешать основному окну.
+export const QUICK_AGENT_PORT = 47776
+export const QUICK_WORKER_PORT = 47778
 export const CHUNK_SIZE = 8 * 1024 * 1024
 // marge pour le nonce (24 o) + le tag Poly1305 (16 o)
 export const MAX_CHUNK_BODY = CHUNK_SIZE + 64

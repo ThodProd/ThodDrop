@@ -29,6 +29,10 @@ function cfgWith(maxItems: number, maxDays: number): Config {
     lastSendTo: '',
     autostartAsked: true,
     sortPhotosByMonth: true,
+    quickEnabled: false,
+    quickPort: 47776,
+    quickWorkerPort: 47778,
+    openReceived: true,
   }
 }
 

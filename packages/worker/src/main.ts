@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import crypto from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { startServer, checkWindowsFirewall, type RunningServer } from '../../core/src/server.js'
 import { VERSION } from '../../core/src/constants.js'
@@ -19,6 +20,18 @@ const dataDir = process.env.THODHUB_DATA_DIR || path.join(os.homedir(), '.thoddr
 const coreHome = path.join(dataDir, 'core')
 const cacheDir = path.join(dataDir, 'cache')
 const uploadDir = path.join(cacheDir, 'upload-tmp')
+
+// Быстрый режим запускает этот же worker на соседнем порту; порт и публичный
+// адрес передаются только на этот запуск, в config.json они не попадают.
+const envPort = Number(process.env.THODDROP_PORT)
+const portOverride = Number.isInteger(envPort) && envPort > 0 && envPort < 65536 ? envPort : undefined
+const envPublic = Number(process.env.THODDROP_PUBLIC_PORT)
+const publicOverride = Number.isInteger(envPublic) && envPublic > 0 && envPublic < 65536 ? envPublic : undefined
+const strictPort = process.env.THODDROP_STRICT_PORT === '1'
+const packaged = path.basename(process.execPath).toLowerCase() === 'thoddropworker.exe'
+const packageRoot = packaged ? path.resolve(path.dirname(process.execPath), '..') : ''
+const agentPath = process.env.THODDROP_AGENT || (packaged ? path.join(packageRoot, 'agent', 'ThodDropAgent.exe') : '')
+const workerExePath = packaged ? process.execPath : ''
 
 function send(msg: unknown): void {
   process.stdout.write(JSON.stringify(msg) + '\n')
@@ -222,6 +235,25 @@ async function main(): Promise<void> {
   srv = await startServer({
     home: coreHome,
     quiet: true,
+    port: portOverride,
+    publicPort: publicOverride,
+    strictPort,
+    agentPath: agentPath || undefined,
+    workerExePath: workerExePath || undefined,
+    // принятый файл/текст: папка ThodDrop открывается с выделенным файлом
+    openReceived:
+      process.platform === 'win32'
+        ? (filePath) => {
+            try {
+              const explorer = path.join(process.env.WINDIR || 'C:\\Windows', 'explorer.exe')
+              const child = spawn(explorer, ['/select,' + filePath], { detached: true, stdio: 'ignore' })
+              child.on('error', () => {})
+              child.unref()
+            } catch {
+              // Проводник недоступен: получение уже завершено.
+            }
+          }
+        : undefined,
     // проверка брандмауэра Windows: только диагностика. Правила и права
     // администратора worker не меняет (постоянная интеграция запрещена
     // контрактом хаба), пользователю показываются шаги для ручной настройки.

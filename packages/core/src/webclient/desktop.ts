@@ -68,6 +68,10 @@ interface State {
     skin: 'auto' | 'apple' | 'windows'
     lang: 'auto' | 'ru' | 'en'
     shortcutsEnabled: boolean
+    quickEnabled: boolean
+    quickPort: number
+    quickWorkerPort: number
+    openReceived: boolean
     basicNoticeShown: boolean
     /** la question du lancement à l'ouverture de session a reçu une réponse */
     autostartAsked?: boolean
@@ -106,15 +110,30 @@ interface State {
   host?: { macUpdate: { version: string; reveal?: number } | null; loginItemNeedsApproval: boolean }
   ips: string[]
   devices: DevicePub[]
+  /** заявки на доступ по статической ссылке (ждут решения) */
+  knocks?: Array<{ id: string; name: string; platform?: string; createdAt: string }>
   history: HistEntry[]
   outbox: OutboxEntry[]
   clipHistory: ClipEntry[]
 }
 
 
+interface QuickInfo {
+  enabled: boolean
+  running: boolean
+  port: number
+  workerPort: number
+  url: string
+  agentAvailable: boolean
+  started?: boolean
+}
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T
 
 let state: State | null = null
+let quickInfo: QuickInfo | null = null
+let quickQrUrl = ''
+let quickBusy = false
 let currentPairingId: string | null = null
 let currentPairUrl = ''
 let currentDeviceId: string | null = null
@@ -218,6 +237,7 @@ function switchView(view: string) {
   document.querySelectorAll<HTMLButtonElement>('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === view))
   for (const v of Object.keys(VIEW_KEYS)) $(`view-${v}`).classList.toggle('hidden', v !== view)
   $('viewTitle').textContent = VIEW_KEYS[view] ? t(VIEW_KEYS[view]!) : 'Flitdrop'
+  if (view === 'settings') void loadQuick()
 }
 
 /** Silhouette d'appareil pour le radar, selon le type détecté à l'appairage. */
@@ -430,6 +450,61 @@ function applyTheme(theme: 'system' | 'light' | 'dark') {
   else document.documentElement.setAttribute('data-theme', theme)
 }
 
+async function loadQuick(): Promise<void> {
+  if (!state) return
+  try {
+    quickInfo = await api<QuickInfo>('/quick')
+  } catch {
+    quickInfo = null
+  }
+  renderQuick()
+}
+
+function renderQuick(): void {
+  if (!state) return
+  const on = state.config.quickEnabled === true
+  const box = $('quickBox')
+  ;($('setQuick') as unknown as HTMLInputElement).checked = on
+  if (!on) {
+    $('quickState').textContent = t('quick.disabled')
+    box.classList.add('hidden')
+    return
+  }
+  if (!quickInfo) {
+    $('quickState').textContent = t('quick.loading')
+    box.classList.add('hidden')
+    return
+  }
+  if (!quickInfo.agentAvailable) {
+    $('quickState').textContent = t('quick.agentMissing')
+    box.classList.add('hidden')
+    return
+  }
+  $('quickState').textContent = quickInfo.running
+    ? t('quick.running', { port: quickInfo.port })
+    : t('quick.starting', { port: quickInfo.port })
+  box.classList.toggle('hidden', !quickInfo.running)
+  if (!quickInfo.running) return
+  $('quickUrl').textContent = quickInfo.url
+  const img = $('quickQr') as unknown as HTMLImageElement
+  if (img.dataset.url !== quickInfo.url) void loadQuickQr(quickInfo.url)
+}
+
+async function loadQuickQr(url: string): Promise<void> {
+  try {
+    const r = await fetch('/api/admin/quick/qr.svg')
+    if (!r.ok) return
+    const svg = await r.text()
+    const img = $('quickQr') as unknown as HTMLImageElement
+    if (quickQrUrl) URL.revokeObjectURL(quickQrUrl)
+    quickQrUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }))
+    img.src = quickQrUrl
+    img.dataset.url = url
+  } catch {
+    // QR останется пустым, ссылку всё равно можно скопировать
+  }
+}
+
 function renderSettings() {
   if (!state) return
   ;($('setTheme') as unknown as HTMLSelectElement).value = state.config.theme
@@ -443,8 +518,10 @@ function renderSettings() {
   ;($('setMonthFolders') as unknown as HTMLInputElement).checked = state.config.sortPhotosByMonth === true
   ;($('setShortcuts') as unknown as HTMLInputElement).checked = state.config.shortcutsEnabled
   ;($('setClipHistory') as unknown as HTMLInputElement).checked = state.config.clipHistoryEnabled
+  ;($('setOpenReceived') as unknown as HTMLInputElement).checked = state.config.openReceived !== false
   ;($('setClipMax') as unknown as HTMLSelectElement).value = String(state.config.clipHistoryMaxItems)
   ;($('setClipDays') as unknown as HTMLSelectElement).value = String(state.config.clipHistoryMaxDays)
+  renderQuick()
   // réglage du système : seulement dans l'app de bureau
   const autostart = state.autostart
   $('setAutostartRow').classList.toggle('hidden', typeof autostart !== 'boolean')
@@ -656,6 +733,7 @@ function renderAll() {
   renderSettings()
   renderHost()
   renderGuide()
+  renderKnock()
 }
 
 // ---------- premier envoi guidé ----------
@@ -995,6 +1073,15 @@ function connectWS() {
         else if (i > 0) approvals.splice(i, 1)
         break
       }
+      case 'knock': {
+        const d = data as { name?: string }
+        toast(t('knock.requested'), d.name)
+        void refresh()
+        break
+      }
+      case 'knock-resolved':
+        void refresh()
+        break
       case 'outbox-progress': {
         const d = data as { itemId: string; bytes: number; size: number; deviceName?: string; ended?: boolean }
         clearTimeout(outboxProgressEnd.get(d.itemId))
@@ -1079,6 +1166,45 @@ function showApproval() {
 function nextApproval() {
   approvals.shift()
   showApproval()
+}
+
+// ---------- demande d'accès par la lien rapide ----------
+
+let currentKnockId: string | null = null
+
+function renderKnock() {
+  const list = state?.knocks ?? []
+  if (currentKnockId && !list.some((k) => k.id === currentKnockId)) currentKnockId = null
+  if (!currentKnockId) {
+    const k = list[0]
+    if (!k) {
+      $('knockModal').classList.add('hidden')
+      return
+    }
+    currentKnockId = k.id
+    $('knockText').textContent = t('knock.body', { name: k.name || t('knock.unknownDevice') })
+    $('knockModal').classList.remove('hidden')
+    const btns = [$('btnKnockAllow'), $('btnKnockDeny')] as unknown as HTMLButtonElement[]
+    for (const b of btns) b.disabled = true
+    setTimeout(() => {
+      if (currentKnockId === k.id) for (const b of btns) b.disabled = false
+    }, 500)
+  }
+}
+
+async function resolveKnock(allow: boolean): Promise<void> {
+  const id = currentKnockId
+  if (!id) return
+  try {
+    await postJSON(`/quick/knock/${encodeURIComponent(id)}/${allow ? 'approve' : 'deny'}`, {})
+    currentKnockId = null
+    $('knockModal').classList.add('hidden')
+    toast(allow ? t('knock.allowed') : t('knock.denied'))
+    await refresh()
+    renderKnock()
+  } catch (e) {
+    toast(t('knock.failed'), (e as Error).message)
+  }
 }
 
 // ---------- modales ----------
@@ -1260,6 +1386,44 @@ function initUI() {
     }
     void refresh()
   }
+  // быстрый приём: тумблер запускает/останавливает маленького агента сразу
+  ;($('setQuick') as unknown as HTMLInputElement).onchange = async () => {
+    const box = $('setQuick') as unknown as HTMLInputElement
+    if (quickBusy) return
+    const want = box.checked
+    quickBusy = true
+    box.disabled = true
+    $('quickState').textContent = t(want ? 'quick.enabling' : 'quick.disabling')
+    try {
+      quickInfo = (await postJSON(want ? '/quick/enable' : '/quick/disable', {})) as unknown as QuickInfo
+      await refresh()
+      if (want && !quickInfo?.running) toast(t('quick.startFailed'), t('quick.startFailedHint'))
+      else toast(t('set.saved'))
+    } catch (e) {
+      box.checked = !want
+      toast(t('quick.failed'), (e as Error).message)
+    } finally {
+      quickBusy = false
+      box.disabled = false
+      renderQuick()
+    }
+  }
+  $('btnQuickCopy').onclick = () => {
+    const url = quickInfo?.url || $('quickUrl').textContent || ''
+    if (url) void copy(url)
+  }
+  $('btnQuickOpen').onclick = async () => {
+    const url = quickInfo?.url
+    if (!url) return
+    try {
+      await postJSON('/open-url', { url })
+    } catch (e) {
+      toast(t('common.copyFailed'), (e as Error).message)
+    }
+  }
+  $('btnKnockAllow').onclick = () => void resolveKnock(true)
+  $('btnKnockDeny').onclick = () => void resolveKnock(false)
+
   // lancement à l'ouverture de session : réglage du système, appliqué aussitôt
   ;($('setAutostart') as unknown as HTMLInputElement).onchange = async () => {
     const box = $('setAutostart') as unknown as HTMLInputElement
@@ -1360,6 +1524,7 @@ function initUI() {
         requireApproval: ($('setApproval') as unknown as HTMLInputElement).checked,
         clipboardAutoPush: ($('setClipboard') as unknown as HTMLInputElement).checked,
         sortPhotosByMonth: ($('setMonthFolders') as unknown as HTMLInputElement).checked,
+        openReceived: ($('setOpenReceived') as unknown as HTMLInputElement).checked,
         shortcutsEnabled: ($('setShortcuts') as unknown as HTMLInputElement).checked,
         clipHistoryEnabled: ($('setClipHistory') as unknown as HTMLInputElement).checked,
         clipHistoryMaxItems: Number(($('setClipMax') as unknown as HTMLSelectElement).value),

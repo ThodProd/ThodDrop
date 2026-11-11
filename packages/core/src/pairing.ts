@@ -37,6 +37,14 @@ export interface Device {
   // ajouté ensuite part sans, jusqu'à ce qu'on l'active sur le PC. Absent :
   // appairage d'avant ce réglage (complété au chargement) ou pas encore actif.
   clipShare?: boolean
+  // Быстрый приём: устройство постучалось по статической ссылке и ждёт
+  // разрешения на ПК. Хранится только SHA-256 секрета телефона, не сам секрет.
+  // После разрешения телефон забирает ссылку с ключом и делает hello;
+  // до этого он не может ни читать, ни отправлять данные.
+  knockHash?: string
+  knockAt?: string
+  knockState?: 'pending' | 'approved' | 'denied'
+  knockApprovedAt?: string
 }
 
 export class DeviceStore {
@@ -90,6 +98,91 @@ export class DeviceStore {
     this.devices.set(d.id, d)
     this.save()
     return d
+  }
+
+  /** Создать заявку на доступ по статической ссылке. Ключ создаётся сразу,
+   *  но телефон получит его только после разрешения на ПК. */
+  createKnock(instanceId: string | undefined, name: string, platform: string | undefined, secretHash: string): Device {
+    const d = this.create(instanceId)
+    d.name = cleanDeviceName(name) || d.name
+    if (platform) d.platform = platform.slice(0, 24)
+    d.knockHash = secretHash
+    d.knockAt = d.createdAt
+    d.knockState = 'pending'
+    this.save()
+    return d
+  }
+
+  /** Заявки живут 10 минут: брошенный «стук» не занимает место вечно, а
+   *  разрешённый, но так и не подключившийся телефон не хранит ключ. */
+  private pruneKnocks(now = Date.now()): void {
+    const ttl = 10 * 60 * 1000
+    let changed = false
+    for (const [id, d] of this.devices) {
+      if (!d.knockHash) continue
+      const at = Date.parse(d.knockApprovedAt || d.knockAt || d.createdAt)
+      if (!Number.isFinite(at) || now - at <= ttl) continue
+      if (d.status === 'active') {
+        delete d.knockHash
+        delete d.knockAt
+        delete d.knockState
+        delete d.knockApprovedAt
+        changed = true
+      } else if (d.knockState === 'pending' || d.knockState === 'approved' || d.knockState === 'denied') {
+        this.devices.delete(id)
+        changed = true
+      }
+    }
+    if (changed) {
+      try {
+        this.save()
+      } catch {
+        // dossier en lecture seule : la prochaine requête réessaiera
+      }
+    }
+  }
+
+  /** Найти уже созданную заявку по хешу секрета (повторный стук идемпотентен). */
+  findKnock(secretHash: string): Device | undefined {
+    this.pruneKnocks()
+    for (const d of this.devices.values()) {
+      if (d.knockHash && timingSafeEqualStr(d.knockHash, secretHash)) return d
+    }
+    return undefined
+  }
+
+  /** Телефон, ожидающий разрешения: секрет должен совпасть. */
+  knockMatches(id: string, secretHash: string): boolean {
+    this.pruneKnocks()
+    const d = this.devices.get(id)
+    return !!d?.knockHash && timingSafeEqualStr(d.knockHash, secretHash)
+  }
+
+  approveKnock(id: string): boolean {
+    this.pruneKnocks()
+    const d = this.devices.get(id)
+    if (!d || !d.knockHash || d.knockState !== 'pending') return false
+    d.knockState = 'approved'
+    d.knockApprovedAt = new Date().toISOString()
+    this.save()
+    return true
+  }
+
+  denyKnock(id: string): boolean {
+    this.pruneKnocks()
+    const d = this.devices.get(id)
+    if (!d || !d.knockHash || d.knockState !== 'pending') return false
+    d.knockState = 'denied'
+    this.save()
+    return true
+  }
+
+  /** Заявки, которые ещё ждут решения на ПК (для окна на компьютере). */
+  listKnocks() {
+    this.pruneKnocks()
+    return [...this.devices.values()]
+      .filter((d) => d.status === 'pending' && !!d.knockHash && d.knockState === 'pending')
+      .map((d) => ({ id: d.id, name: d.name, platform: d.platform, createdAt: d.createdAt }))
   }
 
   get(id: string): Device | undefined {
@@ -165,6 +258,11 @@ export class DeviceStore {
     }
     d.status = 'active'
     d.lastSeenAt = new Date().toISOString()
+    // Заявка выполнила свою роль: секрет и состояние «стука» больше не нужны.
+    delete d.knockHash
+    delete d.knockAt
+    delete d.knockState
+    delete d.knockApprovedAt
     this.save()
     return wasPending
   }

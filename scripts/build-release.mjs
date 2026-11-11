@@ -10,7 +10,7 @@ import { ZipFile } from 'yazl'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = process.env.THOD_REPO || 'ThodProd/ThodDrop'
-const notes = process.env.THOD_NOTES || 'Исправлен запуск worker: подключение телефона по коду и QR снова работает.'
+const notes = process.env.THOD_NOTES || 'Быстрый приём по постоянной ссылке: маленький агент, QR для iPhone, заявка на доступ и текст в папку Text. Обычная передача файлов и QR-код работают как раньше.'
 const version = JSON.parse(readFileSync(path.join(root, 'packages/core/package.json'), 'utf8')).version
 if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Неверная версия: ' + version)
 
@@ -68,6 +68,15 @@ if (process.platform === 'win32') {
   run(process.execPath, [path.join(root, 'node_modules/@yao-pkg/pkg/lib-es5/bin.js'), '.', '--out-path', work + '/out', '--compress', 'GZip', '--public-packages', '*', '--public'], src)
   cpSync(work + '/out/thoddrop-worker.exe', pkgDir + '/worker/ThodDropWorker.exe')
 }
+
+// маленький агент быстрого приёма: самостоятельный exe рядом с worker/
+run('dotnet', [
+  'publish', path.join(root, 'agent/ThodDropAgent.csproj'),
+  '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true',
+  '-p:PublishSingleFile=true', '-p:PublishTrimmed=true', '-p:TrimMode=partial',
+  '-p:SuppressTrimAnalysisWarnings=true',
+  '-o', pkgDir + '/agent',
+], root)
 
 // интерфейс
 run(process.execPath, [path.join(root, 'packages/ui/build-ui.mjs'), pkgDir + '/ui'], root)

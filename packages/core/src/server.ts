@@ -1,7 +1,7 @@
 import express from 'express'
 import type { Request, Response, NextFunction } from 'express'
-import { spawn } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { execFile, spawn } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
 import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -23,7 +23,7 @@ import {
   FIREWALL_CHECK_AFTER_MS,
 } from './constants.js'
 import { loadConfig, saveConfig, flitdropHome, clampInt, type Config } from './config.js'
-import { DeviceStore, type Device } from './pairing.js'
+import { cleanDeviceName, DeviceStore, type Device } from './pairing.js'
 import { History } from './history.js'
 import { Outbox } from './outbox.js'
 import { Hub } from './events.js'
@@ -179,6 +179,10 @@ const SPEEDTEST_UP_MAX = 8 * 1024 * 1024
 
 export interface StartOptions {
   port?: number
+  /** Порт, который видят телефоны (быстрый агент слушает его и проксирует). */
+  publicPort?: number
+  /** Не подбирать другой порт, если заданный занят (быстрый worker). */
+  strictPort?: boolean
   home?: string
   quiet?: boolean
   disableClipboard?: boolean
@@ -225,6 +229,13 @@ export interface StartOptions {
   openLink?: (url: string) => void
   /** App de bureau : ouvre un dossier (shell.openPath). */
   openPath?: (dir: string) => void
+  /** Показывает принятый файл в проводнике (папка + выделенный файл).
+   *  Отсутствует в тестах и CLI: тогда ничего не открывается. */
+  openReceived?: (filePath: string) => void
+  /** Путь к маленькому агенту быстрого приёма (ThodDropAgent.exe). */
+  agentPath?: string
+  /** Путь к worker.exe, который агент запускает по запросу. */
+  workerExePath?: string
 }
 
 export interface RunningServer {
@@ -293,6 +304,10 @@ const TRANSFER_RATE_PER_MIN = 6000
 // partie : sans authentification, il reste à la limite stricte par adresse
 // (le téléphone ne le demande qu'après une coupure).
 const PHONE_TRANSFER_ROUTE = /^\/(?:transfer\/(?:init|[^/]+\/(?:chunk\/\d+|finish))|outbox\/[^/]+\/download)$/
+// Заявка на доступ по статической ссылке: единственное, что может сделать
+// незнакомое устройство. Ключ устройства выдаётся только после разрешения на ПК.
+const PHONE_KNOCK_ROUTE = /^\/knock(?:\/[^/]+)?$/
+const knockSecretHash = (secret: string): string => createHash('sha256').update(secret, 'utf8').digest('hex')
 
 // au-delà, un texte envoyé compte comme un transfert (activité, PC éveillé)
 const LARGE_TEXT_BYTES = 64 * 1024
@@ -304,6 +319,16 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   // port imposé (tests, ligne de commande) : utilisé pour ce lancement
   // seulement, sans toucher au port mémorisé
   const wantedPort = opts.port ?? cfg.port
+  // Порт, который видят телефоны. В быстром режиме worker слушает 47778, а
+  // агент — 47776; ссылки и QR должны вести на агент, а не на внутренний порт.
+  let actualPort = wantedPort
+  const publicPort = (): number => opts.publicPort ?? actualPort
+  const quickConfigPath = path.join(home, 'quick.json')
+  const agentPath = opts.agentPath ?? process.env.THODDROP_AGENT ?? ''
+  const workerExePath = opts.workerExePath ?? process.execPath
+  const dataRoot = process.env.THODHUB_DATA_DIR || path.dirname(home)
+  // Заявки, отклонённые на ПК: телефон ещё может успеть спросить статус.
+  const deniedKnocks = new Map<string, number>()
 
   // lancement à l'ouverture de session, tel que le système le rapporte
   // (null : inconnu, hors app de bureau). Relu à chaque /state et après un
@@ -335,6 +360,31 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   // Adresse ouverte dans le navigateur du système (page d'achat de Flitdrop
   // Pro) : seulement http(s), ou l'adresse fixe du support, jamais
   // interprétée par un shell.
+  // Показ принятого файла в проводнике. Несколько файлов одного пакета
+  // приходят параллельно: открываем один раз, с последним файлом, а не окно
+  // на каждый файл.
+  let revealTimer: NodeJS.Timeout | undefined
+  let revealPath = ''
+  const revealReceived = (filePath: string): void => {
+    if (!cfg.openReceived || !opts.openReceived) return
+    revealPath = filePath
+    if (revealTimer) return
+    revealTimer = setTimeout(() => {
+      revealTimer = undefined
+      try {
+        opts.openReceived?.(revealPath)
+      } catch {
+        // проводник мог быть занят: получение от этого не страдает
+      }
+    }, 700)
+    revealTimer.unref?.()
+  }
+  const textFileName = (): string => {
+    const d = new Date()
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `text-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.txt`
+  }
+
   const openExternal = (url: string): void => {
     if (!/^https?:\/\/[^\s]+$/i.test(url) || url.length > 2048) return
     if (opts.openExternal) {
@@ -506,6 +556,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     const now = Date.now()
     for (const id of devices.prunePending(PENDING_PAIRING_TTL_MS)) expiredPairings.set(id, { ts: now, reported: false })
     for (const [id, v] of expiredPairings) if (now - v.ts > 60 * 60 * 1000 || expiredPairings.size > 200) expiredPairings.delete(id)
+    for (const [id, ts] of deniedKnocks) if (now - ts > 10 * 60 * 1000 || deniedKnocks.size > 200) deniedKnocks.delete(id)
   }
   const pendingTimer = setInterval(prunePending, 60 * 1000)
   pendingTimer.unref?.()
@@ -809,6 +860,11 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   // Garde montée AVANT tout body-parser : on refuse un appareil inconnu et on
   // limite le débit sans jamais bufferiser le corps d'un attaquant non appairé.
   const phoneRate = rateLimit(240, 60_000)
+  // Незнакомый телефон может только «постучаться»: редкий лимит на создание
+  // заявки. Опрос статуса идёт каждые 2 секунды и имеет отдельный, широкий
+  // лимит: иначе телефон упрётся в него раньше, чем ПК успеет ответить.
+  const knockCreateRate = rateLimit(10, 60_000)
+  const knockPollRate = rateLimit(240, 60_000)
   // Les requêtes de transfert d'un téléphone appairé (début, morceaux, statut,
   // fin, téléchargement) ont leur propre budget, par appareil et bien plus
   // large : une vidéo à pleine vitesse du wifi ou un lot de 100 photos en font
@@ -824,12 +880,18 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     (req) => `dev:${String(req.headers['x-wd-device'] ?? '')}|${req.socket.remoteAddress ?? '?'}`
   )
   app.use('/api/phone', (req, res, next) => {
+    if (PHONE_KNOCK_ROUTE.test(req.path)) {
+      return (req.path === '/knock' ? knockCreateRate : knockPollRate)(req, res, next)
+    }
     const id = String(req.headers['x-wd-device'] ?? '')
     const dev = id ? devices.get(id) : undefined
     if (dev && dev.status === 'active' && PHONE_TRANSFER_ROUTE.test(req.path)) return transferRate(req, res, next)
     return phoneRate(req, res, next)
   })
   app.use('/api/phone', (req, res, next) => {
+    // Заявку принимает отдельный маршрут ниже: у незнакомого устройства ещё
+    // нет ключа, но постучаться можно (и только это).
+    if (PHONE_KNOCK_ROUTE.test(req.path)) return next()
     const id = String(req.headers['x-wd-device'] ?? '')
     const dev = id ? devices.get(id) : undefined
     if (!dev) {
@@ -854,6 +916,54 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     // versions comprises, commence toujours par le hello.
     if (dev.status !== 'active' && req.path !== '/hello') return res.status(403).json({ code: 'authRefused' })
     next()
+  })
+
+  // ---------- заявка на доступ по статической ссылке ----------
+  //
+  // У незнакомого телефона нет ключа и он не может ни читать, ни отправлять
+  // данные. Он генерирует случайный секрет, оставляет здесь только его хеш и
+  // ждёт. На ПК появляется окно «Разрешить / Отклонить». После разрешения
+  // телефон забирает обычную ссылку с ключом (только со своим секретом) и
+  // проходит hello, как после QR. Секрет и ключ идут по локальной сети, как и
+  // сам QR-код: это защита от чужих устройств в Wi-Fi, не от прослушивания
+  // канала. ПК должен быть включён; интернет не используется.
+
+  app.post('/api/phone/knock', jsonSmall, (req, res) => {
+    if (!cfg.quickEnabled) return res.status(403).json({ code: 'quickDisabled' })
+    const body = req.body as { name?: unknown; platform?: unknown; secret?: unknown } | undefined
+    const secret = typeof body?.secret === 'string' ? body.secret : ''
+    // 32 случайных байта в base64url — около 43 символов; запас на другие клиенты.
+    if (secret.length < 20 || secret.length > 200) return res.status(400).json({ code: 'knockBadSecret' })
+    const hash = knockSecretHash(secret)
+    const existing = devices.findKnock(hash)
+    if (existing) {
+      return res.json({
+        id: existing.id,
+        state: existing.knockState === 'approved' ? 'approved' : existing.knockState === 'denied' ? 'denied' : 'pending',
+      })
+    }
+    if (devices.listKnocks().length >= 20) return res.status(429).json({ code: 'rateLimited' })
+    const name = typeof body?.name === 'string' ? body.name : ''
+    const platform = typeof body?.platform === 'string' ? body.platform : undefined
+    const d = devices.createKnock(cfg.instanceId, cleanDeviceName(name), platform, hash)
+    hub.broadcast('knock', { id: d.id, name: d.name, platform: d.platform })
+    res.json({ id: d.id, state: 'pending' })
+  })
+
+  app.post('/api/phone/knock/:id', jsonSmall, (req, res) => {
+    const body = req.body as { secret?: unknown } | undefined
+    const secret = typeof body?.secret === 'string' ? body.secret : ''
+    if (secret.length < 20 || secret.length > 200) return res.status(400).json({ code: 'knockBadSecret' })
+    const id = String(req.params.id)
+    const d = devices.get(id)
+    if (!d) {
+      if (deniedKnocks.has(id)) return res.json({ state: 'denied' })
+      return res.status(404).json({ code: 'knockExpired', state: 'expired' })
+    }
+    if (!devices.knockMatches(id, knockSecretHash(secret))) return res.status(403).json({ code: 'knockDenied', state: 'denied' })
+    if (d.knockState === 'approved' || d.status === 'active') return res.json({ state: 'approved', url: pairUrl(d) })
+    if (d.knockState === 'denied') return res.json({ state: 'denied' })
+    res.json({ state: 'pending' })
   })
 
   app.post('/api/phone/hello', jsonSmall, phoneAuth('hello'), (req, res) => {
@@ -910,8 +1020,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
           // adresses de secours : si l'IP du PC change, la page sait où le
           // retrouver sans re-scanner le QR code.
           hosts: [
-            ...localIPv4s().map((ip) => `${ip}:${actualPort}`),
-            `${os.hostname().split('.')[0]}.local:${actualPort}`,
+            ...localIPv4s().map((ip) => `${ip}:${publicPort()}`),
+            `${os.hostname().split('.')[0]}.local:${publicPort()}`,
           ],
           features: PHONE_FEATURES,
         },
@@ -1040,6 +1150,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       return res.status(404).json({ code: 'transferNotFound' })
     try {
       const finalPath = await transfers.finish(t)
+      revealReceived(finalPath)
       devices.touch(dev.id)
       transferOk()
       res.json({ p: sealJSON(key, { ok: true, name: path.basename(finalPath) }, aad(dev.id, 'finish:res')) })
@@ -1064,6 +1175,20 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     if (!text || Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES)
       return res.status(400).json({ code: 'textEmpty' })
     const mode = payload.mode === 'message' ? 'message' : 'clip'
+    // Текст дополнительно сохраняется документом на ПК: телефон → текст →
+    // папка ThodDrop/Text, проводник показывает файл. Буфер обмена остаётся.
+    let savedName: string | undefined
+    try {
+      const dir = path.join(cfg.downloadDir, 'Text')
+      fs.mkdirSync(dir, { recursive: true })
+      const reserved = reserveUniquePath(dir, textFileName())
+      fs.closeSync(reserved.fd)
+      await fs.promises.writeFile(reserved.path, text, 'utf8')
+      savedName = path.basename(reserved.path)
+      revealReceived(reserved.path)
+    } catch {
+      // не удалось записать файл: текст всё равно попадёт в буфер и историю
+    }
     let copied = false
     if (mode === 'clip') {
       copied = await clip.write(text).then(
@@ -1088,11 +1213,12 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       deviceName: dev.name,
       mode,
       copied,
+      savedName,
       text: text.length <= 32_000 ? text : text.slice(0, 32_000),
     })
     devices.touch(dev.id)
     transferOk()
-    res.json({ p: sealJSON(key, { ok: true, copied }, aad(dev.id, 'text:res')) })
+    res.json({ p: sealJSON(key, { ok: true, copied, savedName }, aad(dev.id, 'text:res')) })
   })
 
   // Listes que le téléphone relit toutes les 5 à 6 s : une étiquette de
@@ -1451,10 +1577,128 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     next()
   })
 
-  let actualPort = wantedPort
   const bestIp = () => localIPv4s()[0]
   // la clé et l'instanceId voyagent dans le FRAGMENT (#), jamais envoyé au réseau
-  const pairUrl = (d: Device) => `http://${bestIp() ?? '127.0.0.1'}:${actualPort}/s/#${d.id}.${d.keyB64}.${cfg.instanceId}`
+  const pairUrl = (d: Device) => `http://${bestIp() ?? '127.0.0.1'}:${publicPort()}/s/#${d.id}.${d.keyB64}.${cfg.instanceId}`
+  // Статическая ссылка быстрого приёма: без ключа, только «постучаться».
+  const quickUrl = () => `http://${bestIp() ?? '127.0.0.1'}:${cfg.quickPort}/s/`
+
+  // ---------- быстрый приём: маленький агент ----------
+  // Агент читает quick.json, слушает cfg.quickPort и запускает worker на
+  // cfg.quickWorkerPort при первом запросе. Ссылка и QR всегда ведут на агент,
+  // поэтому телефону не нужно знать внутренний порт worker.
+
+  const writeQuickConfig = (enabled: boolean): void => {
+    const data = {
+      enabled,
+      port: cfg.quickPort,
+      workerPort: cfg.quickWorkerPort,
+      // обычный worker (окно ThodDrop) имеет приоритет: агент уступает ему
+      normalPort: cfg.port,
+      worker: workerExePath,
+      dataDir: dataRoot,
+      home,
+      downloadDir: cfg.downloadDir,
+    }
+    fs.writeFileSync(quickConfigPath, JSON.stringify(data, null, 2), { mode: 0o600 })
+  }
+  const runReg = (args: string[]): Promise<boolean> =>
+    new Promise((resolve) => {
+      try {
+        const child = spawn('reg.exe', args, { windowsHide: true, stdio: 'ignore' })
+        child.on('error', () => resolve(false))
+        child.on('exit', (code) => resolve(code === 0))
+      } catch {
+        resolve(false)
+      }
+    })
+  const quickRunValue = () => `"${agentPath}" --config "${quickConfigPath}" --start`
+  const setQuickAutostart = async (on: boolean): Promise<void> => {
+    if (process.platform !== 'win32' || !agentPath) return
+    const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+    if (on) await runReg(['add', key, '/v', 'ThodDropQuick', '/t', 'REG_SZ', '/d', quickRunValue(), '/f'])
+    else await runReg(['delete', key, '/v', 'ThodDropQuick', '/f'])
+  }
+  const startQuickAgent = (): boolean => {
+    if (!agentPath || !fs.existsSync(agentPath)) return false
+    try {
+      const child = spawn(agentPath, ['--config', quickConfigPath, '--start'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      child.on('error', () => {})
+      child.unref()
+      return true
+    } catch {
+      return false
+    }
+  }
+  const agentControl = async (pathname: string, method: 'GET' | 'POST' = 'GET'): Promise<Record<string, unknown> | null> => {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 1200)
+    try {
+      const r = await fetch(`http://127.0.0.1:${cfg.quickPort}${pathname}`, { method, signal: ctrl.signal })
+      if (!r.ok) return null
+      return (await r.json().catch(() => ({}))) as Record<string, unknown>
+    } catch {
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  const quickAgentStatus = () => agentControl('/__quick/status')
+  const waitQuickAgent = async (ms: number): Promise<Record<string, unknown> | null> => {
+    const until = Date.now() + ms
+    while (Date.now() < until) {
+      const status = await quickAgentStatus()
+      if (status) return status
+      await new Promise((r) => setTimeout(r, 150))
+    }
+    return null
+  }
+  const stopQuickAgent = async (): Promise<void> => {
+    await agentControl('/__quick/stop', 'POST')
+    await new Promise((r) => setTimeout(r, 350))
+    let pid = 0
+    try {
+      pid = Number(fs.readFileSync(path.join(home, 'quick-agent.pid'), 'utf8'))
+    } catch {
+      // уже остановлен
+    }
+    // Статус мог не ответить, пока агент запускал worker. Тогда всё равно
+    // проверяем PID: останавливаем только процесс с именем нашего агента,
+    // чтобы не убить чужой процесс, которому достался старый PID.
+    if (Number.isInteger(pid) && pid > 0) {
+      const alive = await quickAgentStatus()
+      const ours =
+        !alive &&
+        (await new Promise<boolean>((resolve) => {
+          execFile(
+            'tasklist.exe',
+            ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'],
+            { windowsHide: true, timeout: 3000 },
+            (err, stdout) => resolve(!err && stdout.toLowerCase().includes('thoddropagent.exe'))
+          )
+        }))
+      if (alive || ours) {
+        spawn('taskkill.exe', ['/PID', String(pid), '/F'], { windowsHide: true, stdio: 'ignore' })
+      }
+    }
+    fs.rmSync(path.join(home, 'quick-agent.pid'), { force: true })
+  }
+  const quickInfo = async () => {
+    const status = cfg.quickEnabled ? await quickAgentStatus() : null
+    return {
+      enabled: cfg.quickEnabled,
+      running: !!status,
+      port: cfg.quickPort,
+      workerPort: cfg.quickWorkerPort,
+      url: quickUrl(),
+      agentAvailable: !!agentPath && fs.existsSync(agentPath),
+      status,
+    }
+  }
 
   // état du système signalé par l'app de bureau (vide en CLI et en tests)
   const host: HostState = { macUpdate: null, loginItemNeedsApproval: false }
@@ -1531,6 +1775,10 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
         autostartAsked: cfg.autostartAsked,
         firstTransferDone: cfg.firstTransferDone,
         sortPhotosByMonth: cfg.sortPhotosByMonth,
+        quickEnabled: cfg.quickEnabled,
+        quickPort: cfg.quickPort,
+        quickWorkerPort: cfg.quickWorkerPort,
+        openReceived: cfg.openReceived,
         port: actualPort,
       },
       // destinataire proposé par défaut quand plusieurs téléphones sont appairés
@@ -1557,6 +1805,8 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       host,
       ips: localIPv4s(),
       devices: devices.listPublic(),
+      // заявки по статической ссылке, ждущие решения на этом ПК
+      knocks: devices.listKnocks(),
       history: history.list(),
       outbox: outbox.listAdmin(),
       clipHistory: clipView(),
@@ -1732,6 +1982,67 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     res.send(svg)
   })
 
+  // ---------- быстрый приём: состояние, включение, QR, заявки ----------
+
+  admin.get('/quick', async (_req, res) => {
+    res.json(await quickInfo())
+  })
+
+  admin.post('/quick/enable', jsonSmall, async (_req, res) => {
+    if (!agentPath || !fs.existsSync(agentPath)) return res.status(400).json({ code: 'agentMissing' })
+    try {
+      cfg.quickEnabled = true
+      saveConfig(home, cfg)
+      writeQuickConfig(true)
+      await setQuickAutostart(true)
+      if (!(await quickAgentStatus())) startQuickAgent()
+      const status = await waitQuickAgent(4000)
+      hub.broadcast('quick-changed', {})
+      res.json({ ok: true, started: !!status, ...(await quickInfo()) })
+    } catch {
+      res.status(500).json({ code: 'agentStartFailed' })
+    }
+  })
+
+  admin.post('/quick/disable', async (_req, res) => {
+    cfg.quickEnabled = false
+    saveConfig(home, cfg)
+    writeQuickConfig(false)
+    await stopQuickAgent()
+    await setQuickAutostart(false)
+    hub.broadcast('quick-changed', {})
+    res.json({ ok: true, enabled: false, running: false, port: cfg.quickPort, workerPort: cfg.quickWorkerPort, url: quickUrl() })
+  })
+
+  admin.get('/quick/qr.svg', async (_req, res) => {
+    if (!cfg.quickEnabled) return res.status(404).json({ code: 'quickDisabled' })
+    const svg = await QRCode.toString(quickUrl(), {
+      type: 'svg',
+      margin: 1,
+      width: 560,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#0d1220ff', light: '#ffffffff' },
+    })
+    res.type('image/svg+xml').setHeader('Cache-Control', 'no-store')
+    res.send(svg)
+  })
+
+  admin.post('/quick/knock/:id/approve', (req, res) => {
+    const id = String(req.params.id)
+    if (!devices.approveKnock(id)) return res.status(404).json({ code: 'knockNotFound' })
+    hub.broadcast('knock-resolved', { id, accepted: true })
+    res.json({ ok: true })
+  })
+
+  admin.post('/quick/knock/:id/deny', (req, res) => {
+    const id = String(req.params.id)
+    if (!devices.denyKnock(id)) return res.status(404).json({ code: 'knockNotFound' })
+    deniedKnocks.set(id, Date.now())
+    devices.revoke(id)
+    hub.broadcast('knock-resolved', { id, accepted: false })
+    res.json({ ok: true })
+  })
+
   admin.post('/device/:id/rename', jsonSmall, (req, res) => {
     const name = typeof (req.body as { name?: unknown })?.name === 'string' ? (req.body as { name: string }).name : ''
     if (!name.trim()) return res.status(400).json({ code: 'emptyName' })
@@ -1885,6 +2196,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     if (body.lang === 'auto' || body.lang === 'ru' || body.lang === 'en') cfg.lang = body.lang
     if (typeof body.shortcutsEnabled === 'boolean') cfg.shortcutsEnabled = body.shortcutsEnabled
     if (typeof body.sortPhotosByMonth === 'boolean') cfg.sortPhotosByMonth = body.sortPhotosByMonth
+    if (typeof body.openReceived === 'boolean') cfg.openReceived = body.openReceived
     saveConfig(home, cfg)
     hub.broadcast('settings-changed', {})
     try {
@@ -1980,14 +2292,18 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       }
       server.once('error', onError)
       server.once('listening', onListening)
-      server.listen(port, '0.0.0.0')
+      // Быстрый worker — внутренний: снаружи к нему ходит только агент с
+      // loopback. Наружу открыт лишь порт агента (static link).
+      server.listen(port, opts.publicPort ? '127.0.0.1' : '0.0.0.0')
     })
 
   // Le port de toujours d'abord, et on l'attend : relancé juste après avoir
   // été quitté, l'ancien Flitdrop le tient encore un instant. Basculer tout
   // de suite (et mémoriser l'autre port) cassait l'appairage des téléphones
   // et leur icône d'écran d'accueil, qui visent l'adresse et le port d'avant.
-  const candidates = portCandidates(wantedPort)
+  // Быстрый worker обязан занять именно свой порт: агент и телефон уже знают
+  // адрес. Обычный запуск по-прежнему перебирает соседние порты.
+  const candidates = opts.strictPort ? [wantedPort] : portCandidates(wantedPort)
   const waitWanted = opts.port === undefined ? PORT_WAIT_MS : 0
   const firstTry = Date.now()
   let portWasBusy = false
@@ -1998,7 +2314,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       break
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code
-      if (port === 0 || (code !== 'EADDRINUSE' && code !== 'EACCES')) throw e
+      if (opts.strictPort || port === 0 || (code !== 'EADDRINUSE' && code !== 'EACCES')) throw e
       portWasBusy = true
       if (i === 0 && code === 'EADDRINUSE' && Date.now() - firstTry < waitWanted) {
         await new Promise((r) => setTimeout(r, 400))
@@ -2009,6 +2325,18 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     }
   }
   actualPort = (server.address() as AddressInfo).port
+  // Быстрый приём включён: обновляем quick.json (в нём путь к этой версии
+  // worker и агента) и поднимаем агента, если он ещё не работает. Quick-worker
+  // (publicPort задан) этого не делает: агент уже его запустил.
+  if (cfg.quickEnabled && !opts.publicPort && agentPath) {
+    try {
+      writeQuickConfig(true)
+      void setQuickAutostart(true)
+      if (!(await quickAgentStatus())) startQuickAgent()
+    } catch {
+      // настройки быстрого приёма не должны мешать обычному запуску
+    }
+  }
   // compté sans rien d'identifiant : savoir si des PC changent de port (les
   // téléphones ne le retrouvent alors plus) aide à régler ce cas
   // un port de secours ne sert que pour ce lancement : la config garde le

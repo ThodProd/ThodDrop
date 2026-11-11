@@ -32,6 +32,13 @@
       <input id="pastePairInput" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" data-i18n-ph="ph.paste.placeholder" placeholder="Colle le lien d’appairage">
       <button class="btn primary wide" id="btnPastePair" data-i18n="ph.paste.btn">Se connecter</button>
     </div>
+    <div id="scanKnock" class="scan-paste">
+      <p class="hint" data-i18n="ph.knock.hint">Нет QR-кода? Запросите доступ — на ПК нужно будет подтвердить.</p>
+      <label class="field-label" for="knockName"><span data-i18n="ph.knock.name">Название телефона</span></label>
+      <input id="knockName" type="text" maxlength="40" autocapitalize="words" data-i18n-ph="ph.knock.namePh" placeholder="Например, iPhone">
+      <button class="btn primary wide" id="btnKnock" data-i18n="ph.knock.btn">Запросить доступ</button>
+      <p class="hint" id="knockState" aria-live="polite"></p>
+    </div>
   </main>
 
   <!-- Erreur / PC injoignable -->

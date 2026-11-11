@@ -44,6 +44,7 @@ interface OutboxItem {
 }
 
 const PAIR_KEY = 'wd_pair'
+const KNOCK_KEY = 'wd_knock'
 const HOSTS_KEY = 'wd_hosts'
 const SKIN_KEY = 'wd_skin'
 const THEME_KEY = 'wd_theme'
@@ -308,6 +309,164 @@ function storedPairing(): Pairing | null {
   return null
 }
 
+// ---------- demande d'accès par la lien rapide ----------
+
+interface KnockState {
+  id: string
+  secret: string
+  at: number
+}
+
+let knockTimer = 0
+let knockBusy = false
+
+function randomSecret(): string {
+  const bytes = new Uint8Array(32)
+  crypto.getRandomValues(bytes)
+  let s = ''
+  for (const b of bytes) s += String.fromCharCode(b)
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function readKnock(): KnockState | null {
+  try {
+    const k = JSON.parse(localStorage.getItem(KNOCK_KEY) || 'null') as KnockState | null
+    return k?.id && k.secret && typeof k.at === 'number' ? k : null
+  } catch {
+    return null
+  }
+}
+
+function saveKnock(k: KnockState): void {
+  localStorage.setItem(KNOCK_KEY, JSON.stringify(k))
+}
+
+function clearKnock(): void {
+  clearTimeout(knockTimer)
+  localStorage.removeItem(KNOCK_KEY)
+}
+
+function knockStateText(text: string): void {
+  $('knockState').textContent = text
+}
+
+function knockButtons(disabled: boolean): void {
+  const btn = $('btnKnock') as unknown as HTMLButtonElement
+  btn.disabled = disabled
+}
+
+/** Отправить заявку: на ПК появится окно «Разрешить / Отклонить». */
+async function startKnock(): Promise<void> {
+  if (knockBusy) return
+  const existing = readKnock()
+  if (existing) {
+    knockBusy = true
+    knockButtons(true)
+    knockStateText(t('ph.knock.waiting'))
+    void pollKnock()
+    return
+  }
+  knockBusy = true
+  knockButtons(true)
+  knockStateText(t('ph.knock.waiting'))
+  const { platform, label } = platformLabel()
+  const input = $('knockName') as unknown as HTMLInputElement
+  const name = (input.value.trim() || label).slice(0, 40)
+  const secret = randomSecret()
+  try {
+    const r = await fetch('/api/phone/knock', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, platform, secret }),
+    })
+    const j = (await r.json().catch(() => ({}))) as { id?: string; state?: string; code?: string }
+    if (!r.ok || !j.id) {
+      knockBusy = false
+      knockButtons(false)
+      if (j.code === 'quickDisabled') knockStateText(t('err.quickDisabled'))
+      else if (j.code === 'rateLimited') knockStateText(t('err.rateLimited'))
+      else knockStateText(t('ph.knock.failed'))
+      return
+    }
+    saveKnock({ id: j.id, secret, at: Date.now() })
+    knockStateText(t('ph.knock.waiting'))
+    void pollKnock()
+  } catch {
+    knockBusy = false
+    knockButtons(false)
+    knockStateText(t('ph.knock.failed'))
+  }
+}
+
+async function pollKnock(): Promise<void> {
+  const k = readKnock()
+  if (!k || !knockBusy) return
+  if (Date.now() - k.at > 5 * 60 * 1000) {
+    clearKnock()
+    knockBusy = false
+    knockButtons(false)
+    knockStateText(t('ph.knock.expired'))
+    return
+  }
+  try {
+    const r = await fetch(`/api/phone/knock/${encodeURIComponent(k.id)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ secret: k.secret }),
+    })
+    const j = (await r.json().catch(() => ({}))) as { state?: string; url?: string }
+    if (j.state === 'approved' && j.url) {
+      const p = parseToken(j.url)
+      if (p) {
+        clearKnock()
+        knockBusy = false
+        knockButtons(false)
+        pair = p
+        notePairingSource(p)
+        localStorage.setItem(PAIR_KEY, JSON.stringify(p))
+        key = b64uToBytes(p.keyB64)
+        knockStateText(t('ph.knock.approved'))
+        show('scan')
+        void connect()
+        return
+      }
+    }
+    if (j.state === 'denied' || r.status === 403) {
+      clearKnock()
+      knockBusy = false
+      knockButtons(false)
+      knockStateText(t('ph.knock.denied'))
+      return
+    }
+    if (j.state === 'expired' || r.status === 404) {
+      clearKnock()
+      knockBusy = false
+      knockButtons(false)
+      knockStateText(t('ph.knock.expired'))
+      return
+    }
+    knockStateText(t('ph.knock.waiting'))
+    clearTimeout(knockTimer)
+    knockTimer = window.setTimeout(() => void pollKnock(), r.status === 429 ? 5000 : 2000)
+  } catch {
+    knockStateText(t('ph.knock.waiting'))
+    clearTimeout(knockTimer)
+    knockTimer = window.setTimeout(() => void pollKnock(), 3000)
+  }
+}
+
+/** После перезагрузки страницы продолжить ожидание уже отправленной заявки. */
+function resumeKnock(): boolean {
+  const k = readKnock()
+  if (!k) return false
+  show('scan')
+  knockBusy = true
+  knockButtons(true)
+  knockStateText(t('ph.knock.waiting'))
+  void pollKnock()
+  return true
+}
+
 /** Avant d'enregistrer un appairage arrivé par l'adresse ou collé : est-ce un
  *  code neuf pour ce téléphone ? On garde l'appairage d'avant au cas où. */
 function notePairingSource(incoming: Pairing) {
@@ -343,6 +502,7 @@ function hintSendOnce() {
 
 function forget() {
   localStorage.removeItem(PAIR_KEY)
+  localStorage.removeItem(KNOCK_KEY)
   location.reload()
 }
 
@@ -1346,8 +1506,8 @@ function initUI() {
     btn.disabled = true
     btn.textContent = t('ph.text.sending')
     try {
-      await post('/api/phone/text', 'text', { text: value, mode: 'clip' })
-      btn.textContent = t('ph.text.done')
+      const res = await post<{ copied?: boolean; savedName?: string }>('/api/phone/text', 'text', { text: value, mode: 'clip' })
+      btn.textContent = t(res?.copied ? 'ph.text.done' : res?.savedName ? 'ph.text.saved' : 'ph.text.sent')
       markTransferOk()
       txt.value = ''
       updateTxtCount()
@@ -1363,12 +1523,14 @@ function initUI() {
   }
 
   $('btnRetry').onclick = () => {
-    show('scan')
-    // plus d'appairage (code expiré sans appairage d'avant) : on rescanne
+    // plus d'appairage (code expiré sans appairage d'avant) : on rescanne ou
+    // on reprend l'attente d'une demande d'accès déjà envoyée
     if (!pair || !key) {
       if (isStandalone()) $('scanPaste')?.classList.remove('hidden')
+      if (!resumeKnock()) show('scan')
       return
     }
+    show('scan')
     void connect()
   }
   $('btnForget').onclick = forget
@@ -1454,6 +1616,7 @@ function initUI() {
     show('scan')
     void connect()
   }
+  $('btnKnock').onclick = () => void startKnock()
   $('btnCloseImg').onclick = () => {
     const img = $('imgPreview') as HTMLImageElement
     if (img.src.startsWith('blob:')) URL.revokeObjectURL(img.src)
@@ -1484,8 +1647,13 @@ if (!pair) {
   // relancée depuis l'écran d'accueil sans appairage mémorisé : on propose le
   // collage du lien plutôt que de laisser l'utilisateur bloqué sur le scan.
   if (isStandalone()) $('scanPaste')?.classList.remove('hidden')
-  show('scan')
+  const { label } = platformLabel()
+  const nameInput = $('knockName') as unknown as HTMLInputElement
+  if (!nameInput.value) nameInput.value = label
+  // заявка, отправленная до перезагрузки, продолжает ждать решения на ПК
+  if (!resumeKnock()) show('scan')
 } else {
+  clearKnock()
   key = b64uToBytes(pair.keyB64)
   void connect()
 }

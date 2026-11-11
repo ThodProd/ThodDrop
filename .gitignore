@@ -1,4 +1,7 @@
 node_modules/
 dist/
 dist-release/
+agent/bin/
+agent/obj/
+agent/publish/
 *.log

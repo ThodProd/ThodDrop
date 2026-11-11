@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { DEFAULT_PORT, DEFAULT_MAX_FILE_MB } from './constants.js'
+import { DEFAULT_PORT, DEFAULT_MAX_FILE_MB, QUICK_AGENT_PORT, QUICK_WORKER_PORT } from './constants.js'
 import { randomToken } from './crypto.js'
 
 export interface Config {
@@ -53,6 +53,14 @@ export interface Config {
   // Pro : photos et vidéos reçues rangées dans un dossier par mois (AAAA-MM).
   // Allumé par défaut ; sans effet en gratuit ou mode payant coupé.
   sortPhotosByMonth: boolean
+  // Быстрый приём по статической ссылке: маленький агент в автозапуске
+  // слушает quickPort, поднимает worker по запросу и проксирует телефонную
+  // страницу. Работает только в локальной сети, пока ПК включён.
+  quickEnabled: boolean
+  quickPort: number
+  quickWorkerPort: number
+  // Открывать проводник на принятом файле/тексте (папка + выделенный файл).
+  openReceived: boolean
 }
 
 
@@ -119,6 +127,10 @@ export function loadConfig(home: string): Config {
     // son réglage de démarrage reste tel quel (jamais changé en silence)
     autostartAsked: typeof stored.autostartAsked === 'boolean' ? stored.autostartAsked : existed,
     sortPhotosByMonth: stored.sortPhotosByMonth === true,
+    quickEnabled: stored.quickEnabled === true,
+    quickPort: validPort(stored.quickPort) ?? QUICK_AGENT_PORT,
+    quickWorkerPort: validPort(stored.quickWorkerPort) ?? QUICK_WORKER_PORT,
+    openReceived: stored.openReceived !== false,
   }
   // migration : absent d'un config.json plus ancien. Une installation qui a
   // déjà appairé un téléphone ou transféré quelque chose a forcément vu la page

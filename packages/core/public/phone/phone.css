@@ -313,6 +313,7 @@ html[data-os='android'] .install-banner { backdrop-filter: none; -webkit-backdro
   color: var(--text); font: 400 15px var(--font); padding: 13px 14px; outline: none;
 }
 .scan-paste input:focus { border-color: color-mix(in srgb, var(--blue) 55%, transparent); }
+.scan-paste .field-label { color: var(--muted); font-size: 13px; text-align: left; margin-bottom: -6px; }
 
 /* juste après le premier appairage : le bouton d'envoi est mis en avant une
    seule fois (trois pulsations d'un anneau uni, puis plus rien) */

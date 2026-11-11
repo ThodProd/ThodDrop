@@ -232,6 +232,10 @@
           <input type="checkbox" id="setClipHistory">
           <span data-i18n="set.clipHistory">Historique du presse-papiers (local uniquement, purgé automatiquement)</span>
         </label>
+        <label class="check">
+          <input type="checkbox" id="setOpenReceived">
+          <span data-i18n="set.openReceived">Открывать папку с полученным файлом или текстом</span>
+        </label>
         <!-- appliqué tout de suite (réglage du système), caché hors app de bureau -->
         <label class="check stat-check hidden" id="setAutostartRow">
           <input type="checkbox" id="setAutostart">
@@ -258,6 +262,27 @@
           </label>
         </div>
         <button class="btn primary" id="btnSaveSettings" data-i18n="set.save">Enregistrer</button>
+      </div>
+
+      <div class="card settings-card" id="quickCard">
+        <h3 data-i18n="quick.title">Быстрый приём по ссылке</h3>
+        <p class="cardhint" data-i18n="quick.hint">Постоянная ссылка для телефона в домашней сети. Маленький агент работает в фоне и запускает ThodDrop только когда телефон что-то отправляет.</p>
+        <label class="check">
+          <input type="checkbox" id="setQuick">
+          <span data-i18n="quick.enable">Включить быстрый приём</span>
+        </label>
+        <p class="cardhint" id="quickState" aria-live="polite"></p>
+        <p class="cardhint" data-i18n="quick.fwHint">При первом включении Windows может спросить доступ к сети для агента — разрешите его для частных сетей.</p>
+        <div id="quickBox" class="quick-box hidden">
+          <div class="qrbox"><img id="quickQr" alt=""></div>
+          <div class="pairurl" id="quickUrl"></div>
+          <p class="cardhint" data-i18n="quick.qrHint">Наведите камеру iPhone на QR-код и добавьте страницу на домашний экран. Ссылку можно сохранить и открывать позже.</p>
+          <div class="row">
+            <button class="btn" id="btnQuickCopy" data-i18n="quick.copy">Скопировать ссылку</button>
+            <button class="btn" id="btnQuickOpen" data-i18n="quick.open">Открыть на ПК</button>
+          </div>
+        </div>
+        <p class="cardhint" data-i18n="quick.note">Ссылка работает только в локальной сети, пока этот ПК включён. Незнакомый телефон сможет лишь запросить доступ; данные он получит только после разрешения здесь.</p>
       </div>
 
       <div class="card settings-card">
@@ -422,6 +447,19 @@
       <div class="row">
         <button class="btn primary grow" id="btnAccept" data-i18n="appr.accept">Accepter</button>
         <button class="btn danger grow" id="btnRefuse" data-i18n="appr.decline">Refuser</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modale de demande d'accès par la lien rapide -->
+  <div class="modal hidden" id="knockModal">
+    <div class="modal-card">
+      <h2 data-i18n="knock.title">Запрос доступа</h2>
+      <p id="knockText"></p>
+      <p class="cardhint" data-i18n="knock.hint">Если это не ваш телефон, нажмите «Отклонить». До разрешения устройство не может отправлять или получать данные.</p>
+      <div class="row">
+        <button class="btn primary grow" id="btnKnockAllow" data-i18n="knock.allow">Разрешить</button>
+        <button class="btn danger grow" id="btnKnockDeny" data-i18n="knock.deny">Отклонить</button>
       </div>
     </div>
   </div>

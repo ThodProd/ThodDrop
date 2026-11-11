@@ -384,6 +384,8 @@ details summary { cursor: pointer; font-weight: 600; color: var(--accent-text); 
 .qrbox { background: #fff; border-radius: var(--r-card); padding: 14px; display: flex; align-items: center; justify-content: center; }
 .qrbox img { width: 100%; max-width: 300px; aspect-ratio: 1; }
 .pairurl { font-family: 'Cascadia Code', Consolas, monospace; font-size: 11.5px; color: var(--muted); text-align: center; word-break: break-all; }
+.quick-box { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+.quick-box .qrbox { align-self: center; width: 100%; max-width: 330px; }
 .pairstate { display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); font-size: 13.5px; font-weight: 600; }
 .pairstate.ok { color: var(--ok); }
 .spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--stroke-2); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
