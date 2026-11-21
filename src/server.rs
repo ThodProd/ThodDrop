@@ -498,6 +498,7 @@ pub fn common() -> Router<App> {
         .route("/api/preview/{id}", get(preview))
         .route("/api/thumbnail/{id}", get(thumbnail))
         .route("/api/archive/{batch}", get(archive))
+        .route("/api/photos.zip", get(photo_archive))
         .route("/api/name", post(own_name))
         .route("/api/text", post(send_text))
         .route("/api/upload", post(upload))
@@ -524,6 +525,7 @@ pub fn web_lan(app: App, ip: Ipv4Addr, port: u16, plain: bool) -> Router {
             .route("/api/preview/{id}", get(preview))
             .route("/api/thumbnail/{id}", get(thumbnail))
             .route("/api/archive/{batch}", get(archive))
+            .route("/api/photos.zip", get(photo_archive))
             .route("/api/text", post(send_text))
             .route("/api/upload", post(upload))
     } else {
@@ -775,6 +777,7 @@ pub struct Page {
 pub fn page<'a>(items: impl Iterator<Item = &'a Item>, query: &Page) -> Value {
     use sha2::{Digest, Sha256};
     let mut rows: Vec<_> = items.collect();
+    let has_photos = rows.iter().any(|item| photo(item));
     rows.sort_unstable_by_key(|item| (std::cmp::Reverse(item.time), item.id));
     let mut seen = HashSet::new();
     let batches = rows
@@ -800,9 +803,9 @@ pub fn page<'a>(items: impl Iterator<Item = &'a Item>, query: &Page) -> Value {
     hash.update([u8::from(more)]);
     let version = format!("{:x}", hash.finalize());
     if query.known.as_deref() == Some(version.as_str()) {
-        return json!({"unchanged":true});
+        return json!({"unchanged":true,"hasPhotos":has_photos});
     }
-    json!({"items":rows,"more":more,"version":version,"next":end})
+    json!({"items":rows,"more":more,"version":version,"next":end,"hasPhotos":has_photos})
 }
 
 async fn items(
@@ -1035,6 +1038,18 @@ async fn archive(
     Principal(owner): Principal,
     AxumPath(batch): AxumPath<Uuid>,
 ) -> Api<Response> {
+    inbox_archive(&app, owner, Some(batch)).await
+}
+
+async fn photo_archive(State(app): State<App>, Principal(owner): Principal) -> Api<Response> {
+    inbox_archive(&app, owner, None).await
+}
+
+fn photo(item: &Item) -> bool {
+    item.text.is_none() && model::image_type(&item.name).is_some()
+}
+
+async fn inbox_archive(app: &App, owner: Uuid, batch: Option<Uuid>) -> Api<Response> {
     let _permit = app.archives.try_acquire().map_err(|_| {
         ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -1045,7 +1060,13 @@ async fn archive(
         let db = app.db.lock().unwrap();
         db.items
             .values()
-            .filter(|item| item.recipient == owner && item.batch == batch && item.text.is_none())
+            .filter(|item| {
+                item.recipient == owner
+                    && match batch {
+                        Some(batch) => item.batch == batch && item.text.is_none(),
+                        None => photo(item),
+                    }
+            })
             .map(|item| (item.name.clone(), app.path(item, owner == db.config.host)))
             .collect::<Vec<_>>()
     };
@@ -1081,7 +1102,11 @@ async fn archive(
     Ok(stream(
         tokio::fs::File::from_std(file),
         size,
-        "ThodDrop.zip",
+        if batch.is_some() {
+            "ThodDrop.zip"
+        } else {
+            "ThodDrop-photos.zip"
+        },
         "application/zip",
         false,
     ))

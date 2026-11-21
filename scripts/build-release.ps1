@@ -34,4 +34,4 @@ foreach ($asset in @('style.css', 'common.js', 'desktop.js', 'icon-192.png')) {
 Copy-Item -LiteralPath (Join-Path $root 'sdk/thodhub.js') -Destination $ui.FullName
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $stage
 & $packageScript -PackageDirectory $stage -Repository 'ThodProd/ThodDrop' -OutputDirectory $OutputDirectory `
-    -Notes 'На iPhone сохранение фото открывается внутри ThodDrop. Доступны системное меню «Поделиться», сохранение фото удержанием и скачивание оригинала с именем файла.'
+    -Notes 'Кнопка «Скачать все фото» собирает изображения из всех входящих сообщений в один ZIP.'

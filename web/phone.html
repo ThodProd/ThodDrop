@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/style.css">
   <title>ThodDrop</title>
   <script defer src="/common.js"></script>
-  <script defer src="/phone.js?v=2.0.6"></script>
+  <script defer src="/phone.js?v=2.0.7"></script>
 </head>
 <body class="phone">
   <header class="top"><span class="brand"><img src="/icon-192.png" alt="">ThodDrop</span><span id="connection" class="tag" aria-live="polite">Подключение…</span></header>
@@ -42,7 +42,10 @@
         </form>
       </section>
       <section>
-        <h2>Входящие</h2>
+        <div class="section-head">
+          <h2>Входящие</h2>
+          <a id="download-photos" class="link-button" href="/api/photos.zip" download="ThodDrop-photos.zip" hidden><span data-icon="down"></span>Скачать все фото</a>
+        </div>
         <div id="items" class="inbox"></div>
         <button type="button" id="more" hidden>Показать ещё</button>
       </section>

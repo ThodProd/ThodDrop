@@ -330,6 +330,7 @@ function renderInbox() {
 async function loadInbox(offset = 0) {
   const query = new URLSearchParams({offset, known:offset ? '' : (inboxVersion || '')});
   const page = await api('/api/items?' + query);
+  $('download-photos').hidden = !page.hasPhotos;
   if (page.unchanged) return;
   if (!offset) inboxVersion = page.version;
   const items = offset ? [...rows, ...page.items] : page.items;
