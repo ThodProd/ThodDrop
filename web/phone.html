@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f7f8fa">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ThodDrop">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icon-180.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
   <link rel="icon" href="/icon-192.png">
   <link rel="stylesheet" href="/style.css">
   <title>ThodDrop</title>
@@ -46,11 +47,10 @@
         <div id="items" class="inbox"></div>
         <button type="button" id="more" hidden>Показать ещё</button>
       </section>
-      <details class="install">
-        <summary>Добавить на главный экран</summary>
-        <p>На iPhone откройте эту страницу в Safari, нажмите «Поделиться» → «На экран “Домой”». На Android откройте меню Chrome и выберите «Установить приложение» или «Добавить на главный экран».</p>
-      </details>
     </div>
+    <footer class="certificate-footer">
+      <a class="link-button" href="/certificate">Установить сертификат</a>
+    </footer>
   </main>
   <dialog id="confirm">
     <form method="dialog">
@@ -58,6 +58,11 @@
       <p id="delete-name"></p>
       <div class="actions"><button value="cancel">Отмена</button><button type="button" value="yes" class="danger" id="confirm-delete">Удалить</button></div>
     </form>
+  </dialog>
+  <dialog id="image-viewer" aria-label="Просмотр изображения">
+    <button type="button" aria-label="Закрыть изображение" autofocus>Закрыть</button>
+    <p id="image-status" role="status"></p>
+    <img id="full-image" alt="" hidden>
   </dialog>
 </body>
 </html>

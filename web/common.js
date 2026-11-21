@@ -51,20 +51,19 @@ function size(bytes) {
   return (bytes / 1024 ** 3).toFixed(1) + ' ГБ';
 }
 const date = new Intl.DateTimeFormat('ru', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
-const imageFile = name => /\.(png|jpe?g|webp|gif|bmp)$/i.test(name);
+const imageFile = name => /\.(png|jpe?g|webp|gif|bmp|tiff?|ico|hei[cf]|avif)$/i.test(name);
 const selected = new Set();
-function renderTargets(roster, rerender, includeOffline = false) {
+function renderTargets(roster, rerender) {
   const all = roster?.devices.filter(d => d.id !== roster.self) || [];
-  const available = all.filter(d => d.online);
-  for (const id of selected) if (!available.some(d => d.id === id)) selected.delete(id);
+  for (const id of selected) if (!all.some(d => d.id === id)) selected.delete(id);
   const list = $('targets');
   list.replaceChildren();
-  if (!available.length) list.append(el('span', 'muted', 'Сейчас нет получателей онлайн.'));
-  for (const device of includeOffline ? all : available) {
+  if (!all.length) list.append(el('span', 'muted', 'Подключите устройство для отправки.'));
+  for (const device of all) {
     const node = deviceButton(device, rerender);
-    if (includeOffline && !device.online) {
+    if (!device.online) {
       node.append(el('small', '', 'Не в сети'));
-      node.title = 'Не в сети';
+      node.title = 'Передача появится при следующем подключении';
     }
     list.append(node);
   }
@@ -78,7 +77,6 @@ function deviceButton(device, rerender) {
   }, device.kind === 'pc' ? 'pc' : 'phone');
   node.classList.add('recipient');
   node.setAttribute('aria-pressed', selected.has(device.id));
-  node.disabled = !device.online;
   return node;
 }
 function showAttachments(files, remove) {
@@ -101,7 +99,8 @@ function download(label, href, graphic = 'down') {
 function itemRow(item, actions, picture) {
   const row = el('article', 'item');
   const title = el('div', 'item-title');
-  title.append(el('strong', '', item.name), el('small', '', [item.sender, date.format(item.time), item.text == null ? size(item.size) : null].filter(Boolean).join(' · ')));
+  title.append(el('strong', '', item.name));
+  if (item.text == null) title.append(el('small', '', size(item.size)));
   const toolbar = el('div', 'item-actions');
   toolbar.append(...actions);
   const head = el('div', 'item-head');
@@ -114,4 +113,67 @@ function itemRow(item, actions, picture) {
     row.append(details);
   } else if (picture) row.append(picture);
   return row;
+}
+
+function renderBatches(parent, items, renderItem, batchAction) {
+  const open = new Set([...parent.querySelectorAll('article:has(details[open])')].map(node => node.dataset.id));
+  const batches = new Map();
+  for (const item of items) {
+    if (!batches.has(item.batch)) batches.set(item.batch, []);
+    batches.get(item.batch).push(item);
+  }
+  const cards = [];
+  for (const batch of batches.values()) {
+    const newest = batch[0];
+    const card = el('section', 'transfer');
+    const head = el('header', 'transfer-head');
+    head.append(el('strong', '', newest.sender), el('time', 'muted', date.format(newest.time)));
+    const action = batchAction?.(batch);
+    if (action) head.append(action);
+    card.append(head);
+    const content = el('div', 'transfer-content');
+    for (const item of [...batch].reverse()) {
+      const node = renderItem(item);
+      node.dataset.id = item.id;
+      if (open.has(item.id) && item.text != null) node.querySelector('details').open = true;
+      content.append(node);
+    }
+    card.append(content);
+    cards.push(card);
+  }
+  parent.replaceChildren(...(cards.length ? cards : [el('p', 'muted', 'Здесь появятся полученные файлы и текст.')]));
+}
+
+const imageDialog = $('image-viewer');
+const fullImage = $('full-image');
+let imageRequest = 0;
+imageDialog.querySelector('button').onclick = () => imageDialog.close();
+imageDialog.addEventListener('click', event => { if (event.target === imageDialog) imageDialog.close(); });
+imageDialog.addEventListener('close', () => {
+  if (imageDialog.open) return;
+  ++imageRequest;
+  fullImage.removeAttribute('src');
+});
+
+async function showImage(name, url) {
+  const request = ++imageRequest;
+  const status = $('image-status');
+  fullImage.hidden = true;
+  fullImage.alt = name;
+  status.hidden = false;
+  status.textContent = 'Загрузка изображения…';
+  if (!imageDialog.open) imageDialog.showModal();
+  try {
+    const src = await url();
+    if (request !== imageRequest || !imageDialog.open) return;
+    fullImage.src = src;
+    await fullImage.decode();
+    if (request !== imageRequest || !imageDialog.open) return;
+    status.hidden = true;
+    fullImage.hidden = false;
+  } catch (error) {
+    if (request === imageRequest && imageDialog.open) {
+      status.textContent = error.message && !(error instanceof DOMException) ? error.message : 'Не удалось открыть изображение.';
+    }
+  }
 }

@@ -12,7 +12,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -41,6 +41,8 @@ pub struct Server {
     pub jobs: Mutex<HashMap<Uuid, Job>>,
     pub dialogs: Mutex<HashMap<Uuid, DialogJob>>,
     pub candidates: Mutex<HashMap<String, Candidate>>,
+    pub rescan: tokio::sync::Notify,
+    pub certificate_url: Mutex<Option<String>>,
     pub uploads: Semaphore,
     pub archives: Semaphore,
     pub restart: std::sync::atomic::AtomicBool,
@@ -52,6 +54,7 @@ pub struct Database {
     pub devices: Devices,
     pub items: Items,
     pub local_items: Items,
+    pub inbox_folders: BTreeMap<Uuid, String>,
     pub presence: HashMap<Uuid, Instant>,
     pub invites: HashMap<String, (String, Instant)>,
     pub pc_code: Option<crate::short_code::Pending>,
@@ -63,8 +66,6 @@ pub struct Database {
 pub struct Candidate {
     pub url: String,
     pub name: String,
-    #[serde(skip)]
-    pub seen: Option<Instant>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -155,6 +156,7 @@ impl Server {
             devices: model::read(&root.join("devices-v2.json"))?,
             items: model::read(&root.join("transfers-v2.json"))?,
             local_items: model::read(&root.join("received-v2.json"))?,
+            inbox_folders: model::read(&root.join("inbox-folders-v3.json"))?,
             config,
             presence: HashMap::new(),
             invites: HashMap::new(),
@@ -174,6 +176,8 @@ impl Server {
             jobs: Mutex::default(),
             dialogs: Mutex::default(),
             candidates: Mutex::default(),
+            rescan: tokio::sync::Notify::new(),
+            certificate_url: Mutex::default(),
             uploads: Semaphore::new(4),
             archives: Semaphore::new(2),
             restart: false.into(),
@@ -182,11 +186,83 @@ impl Server {
     }
 
     pub fn path(&self, item: &Item, local: bool) -> PathBuf {
+        if local && let (Some(folder), Some(name)) = (&item.inbox_folder, &item.stored_name) {
+            return self
+                .root
+                .join("inbox")
+                .join(model::file_name(folder))
+                .join(model::file_name(name));
+        }
         let dirname = if local { "inbox" } else { "relay" };
         self.root
             .join(dirname)
             .join(item.id.to_string())
             .join(model::file_name(&item.name))
+    }
+
+    pub fn save_inbox_file(
+        &self,
+        db: &mut Database,
+        item: &mut Item,
+        source: &Path,
+    ) -> Result<PathBuf> {
+        let inbox = self.root.join("inbox");
+        let sender = item
+            .sender_id
+            .unwrap_or_else(|| Uuid::new_v5(&item.recipient, item.sender.as_bytes()));
+        let folder = if let Some(folder) = db.inbox_folders.get(&sender) {
+            model::file_name(folder)
+        } else {
+            let label = model::file_name(&item.sender.chars().take(64).collect::<String>());
+            let mut folder = label.clone();
+            let mut index = 2;
+            while inbox.join(&folder).exists()
+                || db
+                    .inbox_folders
+                    .values()
+                    .any(|existing| existing.to_lowercase() == folder.to_lowercase())
+            {
+                folder = format!("{label} ({index})");
+                index += 1;
+            }
+            let mut folders = db.inbox_folders.clone();
+            folders.insert(sender, folder.clone());
+            model::write(&self.root.join("inbox-folders-v3.json"), &folders)?;
+            db.inbox_folders = folders;
+            folder
+        };
+        let dir = inbox.join(&folder);
+        std::fs::create_dir_all(&dir)?;
+        let original = if item.text.is_some() {
+            "Текст.txt".into()
+        } else {
+            model::file_name(&model::file_name(&item.name))
+        };
+        let mut filename = original.clone();
+        for index in 2.. {
+            let path = dir.join(&filename);
+            match std::fs::hard_link(source, &path) {
+                Ok(()) => {
+                    item.inbox_folder = Some(folder);
+                    item.stored_name = Some(filename);
+                    return Ok(path);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let prefix = format!("{index}-");
+                    let (stem, extension) = match original.rsplit_once('.') {
+                        Some((stem, ext)) if ext.chars().count() <= 12 => (stem, format!(".{ext}")),
+                        _ => (original.as_str(), String::new()),
+                    };
+                    let fit = 100 - prefix.len() - extension.chars().count();
+                    filename = model::file_name(&format!(
+                        "{prefix}{}{extension}",
+                        stem.chars().take(fit).collect::<String>()
+                    ));
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+        unreachable!()
     }
 
     pub fn save_config(&self, db: &mut Database, config: Config) -> Result<()> {
@@ -262,23 +338,7 @@ pub fn lan(app: App, ip: Ipv4Addr, port: u16) -> Router {
             let app = layer_app.clone();
             let expected = expected.clone();
             async move {
-                let src = req
-                    .extensions()
-                    .get::<ConnectInfo<SocketAddr>>()
-                    .map(|src| src.0.ip());
-                let trusted = matches!((src, mask), (Some(std::net::IpAddr::V4(src)), Some(mask)) if net::in_subnet(ip, src, mask));
-                let host = req
-                    .uri()
-                    .authority()
-                    .map(|authority| authority.as_str())
-                    .or_else(|| {
-                        req.headers()
-                            .get(header::HOST)
-                            .and_then(|value| value.to_str().ok())
-                    });
-                let expected_host = host == Some(expected.as_str())
-                    || (port == 443 && host.is_some_and(|host| host == ip.to_string()));
-                if !trusted || !expected_host {
+                if !lan_request(&req, ip, port == 443, mask, &expected) {
                     return StatusCode::FORBIDDEN.into_response();
                 }
                 if req.method() != axum::http::Method::GET
@@ -295,6 +355,48 @@ pub fn lan(app: App, ip: Ipv4Addr, port: u16) -> Router {
         }))
         .layer(small_body())
         .with_state(app)
+}
+
+pub fn certificate_lan(app: App, ip: Ipv4Addr, port: u16) -> Router {
+    let expected = format!("{ip}:{port}");
+    let mask = net::subnet_mask(ip);
+    crate::phone::certificate_bootstrap()
+        .layer(middleware::from_fn(move |req: Request, next: Next| {
+            let expected = expected.clone();
+            async move {
+                if !lan_request(&req, ip, port == 80, mask, &expected) {
+                    return StatusCode::FORBIDDEN.into_response();
+                }
+                secure(next.run(req).await)
+            }
+        }))
+        .with_state(app)
+}
+
+fn lan_request(
+    req: &Request,
+    ip: Ipv4Addr,
+    default_port: bool,
+    mask: Option<u32>,
+    expected: &str,
+) -> bool {
+    let src = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|src| src.0.ip());
+    let trusted = matches!((src, mask), (Some(std::net::IpAddr::V4(src)), Some(mask)) if net::in_subnet(ip, src, mask));
+    let host = req
+        .uri()
+        .authority()
+        .map(|authority| authority.as_str())
+        .or_else(|| {
+            req.headers()
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok())
+        });
+    trusted
+        && (host == Some(expected)
+            || (default_port && host.is_some_and(|host| host == ip.to_string())))
 }
 
 pub fn local(app: App) -> Router {
@@ -451,11 +553,22 @@ pub fn page<'a>(items: impl Iterator<Item = &'a Item>, query: &Page) -> Value {
     use sha2::{Digest, Sha256};
     let mut rows: Vec<_> = items.collect();
     rows.sort_unstable_by_key(|item| (std::cmp::Reverse(item.time), item.id));
-    let more = query.offset.saturating_add(30) < rows.len();
-    let rows = rows
+    let mut seen = HashSet::new();
+    let batches = rows
+        .iter()
+        .filter(|item| seen.insert(item.batch))
+        .map(|item| item.batch)
+        .collect::<Vec<_>>();
+    let end = query.offset.saturating_add(30);
+    let more = end < batches.len();
+    let selected = batches
         .into_iter()
         .skip(query.offset)
         .take(30)
+        .collect::<HashSet<_>>();
+    let rows = rows
+        .into_iter()
+        .filter(|item| selected.contains(&item.batch))
         .collect::<Vec<_>>();
     let mut hash = Sha256::new();
     for item in &rows {
@@ -466,7 +579,7 @@ pub fn page<'a>(items: impl Iterator<Item = &'a Item>, query: &Page) -> Value {
     if query.known.as_deref() == Some(version.as_str()) {
         return json!({"unchanged":true});
     }
-    json!({"items":rows,"more":more,"version":version})
+    json!({"items":rows,"more":more,"version":version,"next":end})
 }
 
 async fn items(
@@ -560,7 +673,7 @@ pub fn drop_item(
         return Ok(false);
     };
     let path = app.path(&item, mirrored || item.recipient == db.config.host);
-    if file && item.text.is_none() {
+    if file && (item.text.is_none() || item.stored_name.is_some()) {
         match std::fs::remove_file(&path) {
             Ok(()) => {
                 if let Some(parent) = path.parent() {
@@ -620,7 +733,16 @@ async fn preview(
 ) -> Api<Response> {
     let (item, local) = lookup(&app, owner, id)?;
     let mime = model::image_type(&item.name).ok_or_else(missing)?;
-    stream_file(&app.path(&item, local), &item.name, mime, true).await
+    let path = app.path(&item, local);
+    match mime {
+        "image/heif" | "image/tiff" | "image/x-icon" | "image/avif" => {
+            match rendered_preview(&app, path.clone(), true).await {
+                Ok(response) => Ok(response),
+                Err(_) => stream_file(&path, &item.name, mime, true).await,
+            }
+        }
+        _ => stream_file(&path, &item.name, mime, true).await,
+    }
 }
 
 async fn thumbnail(
@@ -632,16 +754,19 @@ async fn thumbnail(
     if model::image_type(&item.name).is_none() {
         return Err(missing());
     }
-    let path = app.path(&item, local);
+    rendered_preview(&app, app.path(&item, local), false).await
+}
+
+async fn rendered_preview(app: &App, path: PathBuf, full: bool) -> Api<Response> {
     let _permit = app
         .archives
         .acquire()
         .await
         .context("Очередь изображений закрыта.")?;
-    let data = tokio::task::spawn_blocking(move || win::thumbnail(&path))
+    let (mime, data) = tokio::task::spawn_blocking(move || win::preview_image(&path, full))
         .await
         .context("Не удалось создать миниатюру.")??;
-    Ok(([(header::CONTENT_TYPE, "image/png")], data).into_response())
+    Ok(([(header::CONTENT_TYPE, mime)], data).into_response())
 }
 
 async fn stream_file(path: &Path, name: &str, mime: &str, inline: bool) -> Api<Response> {
@@ -737,7 +862,7 @@ pub struct FileSend {
     pub batch: Uuid,
 }
 
-fn targets(db: &Database, from: Uuid, to: &[Uuid], require_online: bool) -> Result<()> {
+fn targets(db: &Database, from: Uuid, to: &[Uuid]) -> Result<()> {
     if to.is_empty() || to.len() > 64 {
         bail!("Выберите получателей.")
     }
@@ -746,15 +871,8 @@ fn targets(db: &Database, from: Uuid, to: &[Uuid], require_online: bool) -> Resu
         if *id == from || !seen.insert(*id) {
             bail!("Проверьте список получателей.")
         }
-        if *id != db.config.host
-            && (!db.devices.contains_key(id)
-                || require_online
-                    && !db
-                        .presence
-                        .get(id)
-                        .is_some_and(|last| last.elapsed() < Duration::from_secs(12)))
-        {
-            bail!("Один из получателей вышел из сети. Обновите список.")
+        if *id != db.config.host && !db.devices.contains_key(id) {
+            bail!("Одно из устройств больше не подключено.")
         }
     }
     Ok(())
@@ -776,7 +894,7 @@ fn store(
     file: Option<StagedFile<'_>>,
 ) -> Result<usize> {
     let mut db = app.db.lock().unwrap();
-    targets(&db, from, to, file.is_none())?;
+    targets(&db, from, to)?;
     let sender = if from == db.config.host {
         db.config.name.clone()
     } else {
@@ -796,9 +914,13 @@ fn store(
     }
     let mut items = db.items.clone();
     let mut paths = Vec::new();
+    let text_file = match text.as_ref().filter(|_| to.contains(&db.config.host)) {
+        Some(text) => Some(model::stage_text(&app.root, text)?),
+        None => None,
+    };
     let result = (|| -> Result<()> {
         for &recipient in to {
-            let item = Item {
+            let mut item = Item {
                 id: Uuid::new_v4(),
                 batch: Uuid::new_v5(&from, batch.as_bytes()),
                 sender: sender.clone(),
@@ -807,20 +929,28 @@ fn store(
                 time: model::instant(),
                 size,
                 text: text.clone(),
+                sender_id: Some(from),
+                inbox_folder: None,
+                stored_name: None,
                 delivered: false,
             };
-            if let Some(file) = &file {
-                let path = app.path(&item, recipient == db.config.host);
+            if recipient == db.config.host {
+                let source = file
+                    .as_ref()
+                    .map(|file| file.inbox.unwrap_or(file.relay))
+                    .or(text_file.as_deref());
+                if let Some(source) = source {
+                    paths.push(app.save_inbox_file(&mut db, &mut item, source)?);
+                }
+            } else if let Some(file) = &file {
+                let path = app.path(&item, false);
                 let parent = path.parent().unwrap();
                 std::fs::create_dir(parent)?;
-                paths.push(path.clone());
-                let source = if recipient == db.config.host {
-                    file.inbox.unwrap_or(file.relay)
-                } else {
-                    file.relay
-                };
-                std::fs::hard_link(source, &path)
-                    .context("Не удалось сохранить файл в папку приёма.")?;
+                if let Err(error) = std::fs::hard_link(file.relay, &path) {
+                    let _ = std::fs::remove_dir(parent);
+                    return Err(error).context("Не удалось сохранить файл для передачи.");
+                }
+                paths.push(path);
             }
             items.insert(item.id, item);
         }
@@ -879,7 +1009,7 @@ async fn upload(
         .map_err(|_| anyhow::anyhow!("Проверьте список получателей."))?;
     let host_needs_copy = {
         let db = app.db.lock().unwrap();
-        targets(&db, from, &to, true)?;
+        targets(&db, from, &to)?;
         to.len() > 1 && to.contains(&db.config.host)
     };
     let temp = tempfile::Builder::new()

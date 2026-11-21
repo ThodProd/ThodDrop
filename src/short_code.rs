@@ -45,6 +45,16 @@ impl Pending {
     pub fn code(&self) -> &str {
         &self.code
     }
+
+    pub fn invite(&self) -> &Invite {
+        &self.invite
+    }
+
+    pub fn remaining(&self) -> u64 {
+        self.expires
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u64
+    }
 }
 
 pub fn normalize(input: &str) -> Option<String> {

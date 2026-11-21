@@ -68,6 +68,12 @@ pub struct Item {
     pub time: u64,
     pub size: u64,
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbox_folder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stored_name: Option<String>,
     #[serde(default)]
     pub delivered: bool,
 }
@@ -98,6 +104,15 @@ pub fn instant() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+pub fn stage_text(root: &Path, text: &str) -> Result<tempfile::TempPath> {
+    let mut temp = tempfile::Builder::new()
+        .prefix(".upload-")
+        .tempfile_in(root.join("runtime"))?;
+    temp.write_all(text.as_bytes())?;
+    temp.as_file().sync_all()?;
+    Ok(temp.into_temp_path())
 }
 
 pub fn secret() -> String {
@@ -158,6 +173,10 @@ pub fn image_type(name: &str) -> Option<&'static str> {
         "webp" => Some("image/webp"),
         "gif" => Some("image/gif"),
         "bmp" => Some("image/bmp"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "ico" => Some("image/x-icon"),
+        "heic" | "heif" => Some("image/heif"),
+        "avif" => Some("image/avif"),
         _ => None,
     }
 }

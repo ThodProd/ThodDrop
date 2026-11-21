@@ -111,6 +111,7 @@ async fn dispatch(
         "config" => (true, "/local/config".into()),
         "freePort" => (true, "/local/free-port".into()),
         "invite" => (true, "/local/invite".into()),
+        "scan" => (true, "/local/scan".into()),
         "certificate" => (true, "/local/certificate".into()),
         "join" => (true, "/local/join".into()),
         "leave" => (true, "/local/leave".into()),

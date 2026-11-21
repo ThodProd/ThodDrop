@@ -1,6 +1,6 @@
 [package]
 name = "thoddrop"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2024"
 license-file = "LICENSE"
 
@@ -14,7 +14,7 @@ base64 = "0.22"
 futures-util = "0.3"
 if-addrs = "0.15"
 time = "0.3"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff"] }
 mdns-sd = "0.22"
 percent-encoding = "2"
 qrcode = { version = "0.14", default-features = false }
@@ -34,6 +34,7 @@ uuid = { version = "1", features = ["serde", "v4", "v5"] }
 zip = { version = "4", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com"] }
 winreg = "0.55"
 winrt-notification = "0.5"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Console"] }

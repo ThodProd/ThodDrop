@@ -13,61 +13,59 @@
   <header class="top">
     <span class="brand"><img src="icon-192.png" alt="">ThodDrop</span>
     <nav aria-label="Разделы" role="tablist">
-      <button id="tab-connect" aria-controls="connect" role="tab" aria-selected="true" data-tab="connect">Подключение</button>
-      <button id="tab-transfers" aria-controls="transfers" role="tab" aria-selected="false" data-tab="transfers">Передачи</button>
+      <button id="tab-transfers" aria-controls="transfers" role="tab" aria-selected="true" data-tab="transfers">Передачи</button>
+      <button id="tab-connect" aria-controls="connect" role="tab" aria-selected="false" data-tab="connect">Подключение</button>
       <button id="tab-settings" aria-controls="settings" role="tab" aria-selected="false" data-tab="settings">Настройки</button>
     </nav>
     <span id="connection" class="tag" aria-live="polite">Запуск…</span>
   </header>
   <main>
     <div id="notice" class="notice" role="status" hidden></div>
-    <section id="connect" role="tabpanel" aria-labelledby="tab-connect">
+    <section id="connect" role="tabpanel" aria-labelledby="tab-connect" hidden>
       <h1>Подключение</h1>
       <div id="host-controls">
         <p class="endpoint" id="address-display"></p>
         <div class="actions pairing-actions">
           <button class="primary" id="phone-invite"><span data-icon="phone"></span>Привязать телефон</button>
-          <button id="pc-invite" aria-controls="pc-invitation" aria-expanded="false"><span data-icon="pc"></span>Код приглашения для ПК</button>
         </div>
-        <details class="trust" id="trust">
-          <summary>Установка сертификата на телефон</summary>
-          <p>Сохраните сертификат и передайте его на телефон через доверенный канал. На iPhone установите профиль, затем включите полное доверие в «Настройки → Основные → Об этом устройстве → Доверие сертификатам». На Android установите его как сертификат CA через настройки безопасности.</p>
-          <button id="certificate">Сохранить сертификат</button>
-        </details>
         <div id="invitation" class="invitation" hidden>
           <img id="qr" alt="QR-код привязки" hidden>
-          <div><strong>Отсканируйте камерой телефона</strong><p>Одно устройство, 5 минут.</p><button id="copy-invite"><span data-icon="copy"></span>Копировать ссылку</button></div>
+          <div><strong>Отсканируйте камерой телефона</strong><p>Одно устройство, 5 минут.</p><div class="actions"><button id="copy-invite"><span data-icon="copy"></span>Копировать ссылку</button><button id="open-certificate">Установить сертификат</button></div></div>
         </div>
-        <div id="pc-invitation" class="invitation pc-invitation" hidden>
+        <div id="pc-invitation" class="invitation pc-invitation">
           <label for="pc-code"><strong>Код приглашения для ПК</strong></label>
           <p>На втором ПК выберите этот компьютер в списке «Компьютеры в сети» и введите пять символов.</p>
-          <input id="pc-code" readonly spellcheck="false" aria-describedby="pc-code-status">
           <div class="actions">
-            <button id="copy-pc-code"><span data-icon="copy"></span>Скопировать код</button>
-            <button id="renew-pc-code">Создать новый код</button>
-            <span id="pc-code-status" class="muted" role="status"></span>
+            <input id="pc-code" readonly spellcheck="false" aria-label="Код приглашения для ПК">
+            <span class="code-timer">
+              <progress id="pc-code-progress" max="300000" value="0" aria-label="Оставшееся время"></progress>
+              <span id="pc-code-status" class="muted"></span>
+            </span>
+            <button id="copy-pc-code" class="icon-button" title="Скопировать код" aria-label="Скопировать код" disabled><span data-icon="copy"></span></button>
+            <button id="renew-pc-code">Обновить код</button>
           </div>
           <details>
             <summary>Компьютер не появляется в списке</summary>
             <p>Скопируйте полное приглашение и вставьте его в окне «Ввести приглашение» на втором ПК.</p>
-            <button id="copy-full-pc-code"><span data-icon="copy"></span>Скопировать полное приглашение</button>
+            <button id="copy-full-pc-code" disabled><span data-icon="copy"></span>Скопировать полное приглашение</button>
           </details>
         </div>
       </div>
       <section class="subsection">
         <div class="section-head"><h2>Мои устройства</h2><button id="to-transfers" hidden><span data-icon="send"></span>Отправить выбранным</button></div>
-        <p class="muted">Выберите одно или несколько устройств онлайн.</p>
+        <p class="muted">Выберите получателей. Устройства вне сети получат передачу при следующем подключении.</p>
         <div id="devices" class="devices"></div>
       </section>
       <section class="subsection" id="search">
         <div id="discovery-results">
-          <h2>Компьютеры в сети</h2>
+          <div class="section-head"><h2>Компьютеры в сети</h2><button id="scan">Сканировать</button></div>
+          <p id="scan-status" class="muted" role="status" hidden></p>
           <div id="candidates" class="devices"></div>
         </div>
         <button id="manual-join">Ввести приглашение</button>
       </section>
     </section>
-    <section id="transfers" role="tabpanel" aria-labelledby="tab-transfers" hidden>
+    <section id="transfers" role="tabpanel" aria-labelledby="tab-transfers">
       <h1>Передачи</h1>
       <form id="send">
         <h2>Отправить</h2>
@@ -77,11 +75,11 @@
         <ul id="attachments" class="attachments" hidden></ul>
         <div class="actions">
           <button type="button" id="files"><span data-icon="attach"></span>Прикрепить файлы</button>
-          <button class="primary" id="send-button"><span data-icon="send"></span>Отправить</button>
+          <button class="primary" id="send-button" disabled><span data-icon="send"></span>Отправить</button>
         </div>
         <progress id="progress" max="1" hidden></progress>
       </form>
-      <section class="subsection">
+      <section class="subsection incoming">
         <h2>Входящие</h2>
         <div id="items" class="inbox"></div>
         <button type="button" id="more" hidden>Показать ещё</button>
@@ -109,6 +107,19 @@
           <button type="button" id="leave" hidden>Отключиться от ведущего ПК</button>
         </div>
       </form>
+      <section class="subsection" id="certificate-settings">
+        <h2>Сертификат</h2>
+        <p>Отсканируйте QR-код с телефона, чтобы открыть страницу установки. Сверьте отпечаток перед включением доверия.</p>
+        <div class="invitation" id="certificate-setup" hidden>
+          <img id="certificate-qr" alt="QR-код для установки сертификата">
+          <div class="fingerprint">
+            <p id="certificate-url" class="endpoint"></p>
+            <p><strong>SHA-256</strong><br><code id="certificate-fingerprint"></code></p>
+            <button id="copy-certificate-url">Скопировать ссылку</button>
+          </div>
+        </div>
+        <button id="certificate">Сохранить сертификат на ПК</button>
+      </section>
     </section>
   </main>
   <dialog id="prompt" aria-labelledby="prompt-title">
@@ -119,6 +130,11 @@
       <label id="prompt-file" class="check" hidden><input type="checkbox" id="prompt-delete-file"> Удалить вместе с файлом на компьютере</label>
       <div class="actions"><button type="button" id="prompt-cancel">Отмена</button><button type="button" id="prompt-submit" class="primary">Сохранить</button></div>
     </form>
+  </dialog>
+  <dialog id="image-viewer" aria-label="Просмотр изображения">
+    <button type="button" aria-label="Закрыть изображение" autofocus>Закрыть</button>
+    <p id="image-status" role="status"></p>
+    <img id="full-image" alt="" hidden>
   </dialog>
 </body>
 </html>

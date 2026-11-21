@@ -3,8 +3,10 @@ let roster = null;
 let files = [];
 let rows = [];
 let more = false;
+let inboxNext = 0;
 let busy = false;
 let refreshing = false;
+let refreshQueued = false;
 let pendingDelete;
 let inboxVersion;
 const pairCode = new URLSearchParams(location.hash.slice(1)).get('pair');
@@ -14,6 +16,10 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 async function api(path, options = {}) {
   const response = await fetch(path, {cache:'no-store', ...options, headers:{'x-thoddrop':'1', ...options.headers}});
   if (response.status === 401) {
+    roster = null;
+    rows = [];
+    inboxVersion = undefined;
+    targets();
     setPaired(false);
     throw new Error('Подключите телефон к ThodDrop.');
   }
@@ -60,7 +66,7 @@ $('pair-form').addEventListener('submit', async event => {
   } catch (error) { failure(error); }
   finally { if (submit) submit.disabled = false; }
 });
-function targets() { renderTargets(roster, targets, true); }
+function targets() { renderTargets(roster, targets); }
 function attachments() {
   showAttachments(files, index => {
     if (busy) return;
@@ -172,19 +178,7 @@ async function copyImage(item) {
 }
 function renderInbox() {
   const parent = $('items');
-  const open = new Set([...parent.querySelectorAll('article:has(details[open])')].map(node => node.dataset.id));
-  parent.replaceChildren();
-  if (!rows.length) parent.append(el('p', 'muted', 'Здесь появятся полученные файлы и текст.'));
-  const batches = new Map();
-  for (const row of rows) if (row.text == null) batches.set(row.batch, (batches.get(row.batch) || 0) + 1);
-  const shown = new Set();
-  for (const item of rows) {
-    if (batches.get(item.batch) > 1 && !shown.has(item.batch)) {
-      const tools = el('div', 'batch');
-      tools.append(download('Скачать пакет ZIP', '/api/archive/' + item.batch));
-      parent.append(tools);
-      shown.add(item.batch);
-    }
+  renderBatches(parent, rows, item => {
     const actions = [];
     let picture;
     if (item.text != null) actions.push(button('Скопировать текст', async () => {
@@ -192,11 +186,21 @@ function renderInbox() {
     }, 'copy', true));
     else {
       if (imageFile(item.name)) {
-        picture = el('img', 'thumb');
-        picture.loading = 'lazy';
-        picture.src = '/api/thumbnail/' + item.id;
-        picture.alt = item.name;
-        picture.onerror = () => { picture.hidden = true; };
+        const url = '/api/preview/' + item.id;
+        picture = button('Открыть фото', () => showImage(item.name, () => url), 'photo');
+        picture.classList.add('image-trigger');
+        picture.setAttribute('aria-label', item.name);
+        const thumb = el('img', 'thumb');
+        thumb.loading = 'lazy';
+        thumb.alt = item.name;
+        thumb.onload = () => {
+          thumb.classList.remove('thumb-loading');
+          picture.replaceChildren(thumb);
+        };
+        thumb.onerror = () => { if (thumb.getAttribute('src') !== url) thumb.src = url; };
+        thumb.classList.add('thumb-loading');
+        thumb.src = '/api/thumbnail/' + item.id;
+        picture.append(thumb);
         if (navigator.clipboard?.write && window.ClipboardItem) actions.push(button('Скопировать изображение', async () => {
           try { await copyImage(item); notice('Скопировано.'); } catch (error) { failure(error); }
         }, 'copy', true));
@@ -205,11 +209,9 @@ function renderInbox() {
     }
     const trash = button('Удалить передачу', () => remove(item), 'remove', true);
     trash.classList.add('remove');
-    const node = itemRow(item, [...actions, trash], picture);
-    node.dataset.id = item.id;
-    if (open.has(item.id) && item.text != null) node.querySelector('details').open = true;
-    parent.append(node);
-  }
+    return itemRow(item, [...actions, trash], picture);
+  }, batch => batch.filter(item => item.text == null).length > 1
+    ? download('Скачать пакет ZIP', '/api/archive/' + batch[0].batch) : null);
   $('more').hidden = !more;
 }
 async function loadInbox(offset = 0) {
@@ -217,16 +219,31 @@ async function loadInbox(offset = 0) {
   const page = await api('/api/items?' + query);
   if (page.unchanged) return;
   if (!offset) inboxVersion = page.version;
-  const next = offset ? [...rows, ...page.items] : [...page.items, ...rows.slice(30)];
-  const unique = new Map(next.map(item => [item.id, item]));
-  const old = rows.map(item => item.id).join();
-  rows = [...unique.values()];
-  if (offset || rows.length <= 30) more = page.more;
-  if (old !== rows.map(item => item.id).join() || !$('items').children.length) renderInbox();
+  const items = offset ? [...rows, ...page.items] : page.items;
+  rows = [...new Map(items.map(item => [item.id, item])).values()];
+  more = page.more;
+  inboxNext = page.next;
+  renderInbox();
 }
-$('more').addEventListener('click', () => loadInbox(rows.length).catch(failure));
+$('more').addEventListener('click', async () => {
+  if (refreshing) return;
+  refreshing = true;
+  try { await loadInbox(inboxNext); } catch (error) { failure(error); }
+  finally { finishRefresh(); }
+});
+function finishRefresh() {
+  refreshing = false;
+  if (refreshQueued) {
+    refreshQueued = false;
+    void refresh(true);
+  }
+}
 async function refresh(force = false) {
-  if (refreshing || (document.hidden && !force)) return;
+  if (!force && document.hidden) return;
+  if (refreshing) {
+    refreshQueued ||= force;
+    return;
+  }
   refreshing = true;
   try {
     const next = await post('/api/presence', {});
@@ -243,7 +260,7 @@ async function refresh(force = false) {
       if (roster) { roster = null; targets(); }
       else if (!pairCode) setPaired(false);
     }
-  } finally { refreshing = false; }
+  } finally { finishRefresh(); }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(true); });
 window.addEventListener('online', () => refresh(true));

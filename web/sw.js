@@ -1,6 +1,6 @@
 'use strict';
-const CACHE = 'thoddrop-shell-2.0.2';
-const SHELL = ['/', '/style.css', '/common.js', '/phone.js', '/icon-180.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'];
+const CACHE = 'thoddrop-shell-2.0.3';
+const SHELL = ['/', '/style.css', '/common.js', '/phone.js', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));

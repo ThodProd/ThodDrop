@@ -57,7 +57,9 @@ fieldset .muted{margin:0}
 .device .recipient{justify-content:start}
 .device .recipient:disabled{opacity:.8}
 .devices{margin:0 0 12px}
-.trust,.install{margin:14px 0;color:var(--muted)}
+.certificate-footer{margin-top:24px}
+.fingerprint code{overflow-wrap:anywhere;font-size:12px}
+#certificate-setup{margin-bottom:12px}
 summary{cursor:pointer}
 details p{margin-top:9px}
 .invitation{display:flex;align-items:center;flex-wrap:wrap;gap:18px;padding:14px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
@@ -66,17 +68,40 @@ details p{margin-top:9px}
 .pc-invitation{display:grid;gap:8px;margin-top:12px}
 .pc-invitation p{margin:0}
 #pc-code{width:11ch;font:600 22px ui-monospace,Consolas,monospace;letter-spacing:.17em}
+.code-timer{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+.code-timer progress{width:44px;height:5px}
 .attachments{margin:0;padding:0;list-style:none;max-height:155px;overflow:auto}
 .attachments li{display:flex;justify-content:space-between;align-items:center;gap:4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
-.item{padding:10px 0;border-bottom:1px solid var(--line)}
+.item{padding:10px 0;min-width:0}
 .item-head{display:flex;align-items:start;justify-content:space-between;gap:8px}
 .item-title{min-width:0;overflow-wrap:anywhere}
 .item-title small{display:block;margin-top:3px}
 .item-actions{display:flex;align-items:center;justify-content:end;gap:2px;flex-wrap:wrap}
 .message{margin-top:6px;background:var(--surface);border-radius:8px;padding:8px 10px;overflow-wrap:anywhere}
 .message-text{white-space:pre-wrap;max-height:240px;overflow:auto;padding-top:8px}
-.thumb{display:block;max-width:min(100%,280px);max-height:145px;margin-top:8px;border:1px solid var(--line);border-radius:8px;object-fit:contain}
-.preview-button{margin-top:8px}
+.thumb{display:block;max-width:100%;max-height:155px;object-fit:contain;border-radius:6px}
+.thumb-loading{position:absolute;width:1px;height:1px;opacity:0}
+.image-trigger{position:relative;max-width:100%;margin-top:8px;padding:3px;overflow:hidden}
+.transfer{padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.transfer-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;overflow-wrap:anywhere}
+.transfer-head a{margin-left:auto}
+.transfer-content{display:grid;gap:0 16px}
+.transfer-content .item+.item{border-top:1px solid var(--line)}
+.transfer-content .message{background:var(--bg)}
+.inbox{display:grid;gap:10px}
+.desktop main{width:100%;max-width:1440px}
+.desktop #transfers:not([hidden]){display:grid;grid-template-columns:minmax(260px,1fr) minmax(360px,2fr);align-items:start;gap:18px 26px}
+.desktop #transfers h1{grid-column:1/-1;margin:0}
+.desktop #transfers #send,.desktop .incoming{padding:16px;border:1px solid var(--line);border-radius:12px}
+.desktop #transfers #send textarea{min-height:112px}
+.desktop .incoming{margin:0;min-height:min(48vh,480px)}
+.desktop .transfer-content{grid-template-columns:repeat(auto-fit,minmax(min(100%,165px),1fr))}
+.desktop .transfer-content .item+.item{border-top:0}
+#image-viewer{position:fixed;inset:0;width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;padding:14px;background:#111;color:#fff;border:0;border-radius:0}
+#image-viewer[open]{display:grid;grid-template: auto minmax(0,1fr) / 1fr;justify-items:center;gap:12px}
+#image-viewer button{justify-self:end;background:#222;color:#fff;border-color:#555}
+#image-viewer img{grid-row:2;align-self:center;max-width:100%;max-height:100%;object-fit:contain}
+#image-status{grid-row:2;align-self:center}
 #more{margin-top:12px}
 progress{width:100%;height:8px;accent-color:var(--accent)}
 dialog{color:var(--text);background:var(--bg);border:1px solid var(--line);border-radius:14px;width:min(420px,calc(100% - 32px));padding:20px;box-shadow:0 12px 45px #0003}
@@ -90,6 +115,7 @@ dialog p{overflow-wrap:anywhere}
 .phone button,.phone .file-button,.phone .link-button{min-height:40px}
 .phone .icon-button{width:40px}
 .phone .actions button.primary{margin-left:auto}
-.phone .inbox .batch{padding:10px 0 6px}
+.phone .inbox .transfer{margin:0;padding:10px 12px}
+@media(max-width:760px){.desktop #transfers:not([hidden]){grid-template-columns:minmax(0,1fr)}}
 @media(max-width:590px){.desktop main{padding:20px 16px 32px}.desktop .top{flex-wrap:wrap;padding:8px 14px;gap:6px}.desktop .top nav{order:3;width:100%;gap:4px}.desktop nav button{padding-inline:8px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}

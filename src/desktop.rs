@@ -26,6 +26,7 @@ pub fn routes() -> Router<App> {
         .route("/local/config", post(configure))
         .route("/local/free-port", post(free_port))
         .route("/local/invite", post(invite))
+        .route("/local/scan", post(scan))
         .route("/local/certificate", post(certificate))
         .route("/local/join", post(join))
         .route("/local/leave", post(leave))
@@ -47,6 +48,7 @@ async fn status(State(app): State<App>) -> Json<Value> {
             json!({"name":db.config.name,"address":db.config.address,"port":db.config.port,
             "discovery":db.config.discovery,"autostart":db.config.autostart,"url":net::url(&db.config),
             "networkError":db.network_error,"peerError":db.peer_error,
+            "pcCodeActive":db.pc_code.as_ref().is_some_and(|code| code.remaining() > 0),
             "joined":db.config.upstream.as_ref().map(|upstream| &upstream.url)}),
             db.config.host,
             db.config.upstream.clone(),
@@ -63,22 +65,28 @@ async fn status(State(app): State<App>) -> Json<Value> {
     };
     if discovery {
         let address = net::url(&app.db.lock().unwrap().config);
-        let candidates = app
+        let mut candidates = app
             .candidates
             .lock()
             .unwrap()
             .values()
-            .filter(|candidate| {
-                Some(&candidate.url) != address.as_ref()
-                    && candidate
-                        .seen
-                        .is_some_and(|seen| seen.elapsed() < Duration::from_secs(150))
-            })
+            .filter(|candidate| Some(&candidate.url) != address.as_ref())
             .cloned()
             .collect::<Vec<_>>();
+        candidates.sort_by(|a, b| (&a.name, &a.url).cmp(&(&b.name, &b.url)));
+        candidates.dedup_by(|a, b| a.url == b.url);
         data["candidates"] = json!(candidates);
     }
+    data["certificateUrl"] = json!(*app.certificate_url.lock().unwrap());
     Json(data)
+}
+
+async fn scan(State(app): State<App>) -> Api<Json<Value>> {
+    if !app.db.lock().unwrap().config.discovery {
+        return Err(anyhow::anyhow!("Включите поиск локальных компьютеров в настройках.").into());
+    }
+    app.rescan.notify_one();
+    Ok(Json(json!(true)))
 }
 
 #[derive(Deserialize)]
@@ -166,8 +174,21 @@ fn restart_later(app: App) {
 #[derive(Deserialize)]
 struct InviteKind {
     kind: String,
+    #[serde(default)]
+    renew: bool,
 }
 async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Json<Value>> {
+    if kind.kind == "certificate" {
+        let link = app
+            .certificate_url
+            .lock()
+            .unwrap()
+            .clone()
+            .context("Страница установки сертификата пока недоступна.")?;
+        return Ok(Json(
+            json!({"link":link,"qr":qr_image(&link)?,"fingerprint":app.ca.fingerprint()?}),
+        ));
+    }
     let mut db = app.db.lock().unwrap();
     if db.config.upstream.is_some() {
         return Err(anyhow::anyhow!("Создайте приглашение на ведущем компьютере.").into());
@@ -176,6 +197,12 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
         return Err(anyhow::anyhow!("{err}").into());
     }
     let url = net::url(&db.config).context("Задайте локальный адрес в настройках.")?;
+    if kind.kind == "pc"
+        && !kind.renew
+        && let Some(pending) = db.pc_code.as_ref().filter(|code| code.remaining() > 0)
+    {
+        return Ok(Json(pc_invitation(pending)?));
+    }
     let code = model::secret();
     let minutes = 5;
     let expires = Instant::now() + Duration::from_secs(minutes * 60);
@@ -187,33 +214,12 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
                 ca: app.ca.pem.clone(),
                 code: code.clone(),
             };
-            let full = URL_SAFE_NO_PAD.encode(
-                serde_json::to_vec(&invite).context("Не удалось сформировать приглашение.")?,
-            );
             let pending = crate::short_code::Pending::new(invite, expires);
-            let data = json!({"code":pending.code(),"full":full,"minutes":minutes});
+            let data = pc_invitation(&pending)?;
             db.pc_code = Some(pending);
             data
         }
-        "phone" => {
-            let qr = qrcode::QrCode::new(&link).context("Не удалось создать QR-код.")?;
-            let width = qr.width();
-            let mut svg = format!(
-                "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {0} {0}' shape-rendering='crispEdges'><rect width='100%' height='100%' fill='white'/><path d='",
-                width + 8
-            );
-            use std::fmt::Write;
-            for y in 0..width {
-                for x in 0..width {
-                    if qr[(x, y)] == qrcode::Color::Dark {
-                        write!(&mut svg, "M{} {}h1v1h-1z", x + 4, y + 4).unwrap();
-                    }
-                }
-            }
-            svg.push_str("'/></svg>");
-            use base64::engine::general_purpose::STANDARD;
-            json!({"link":link,"qr":format!("data:image/svg+xml;base64,{}",STANDARD.encode(svg)),"minutes":minutes})
-        }
+        "phone" => json!({"link":link,"qr":qr_image(&link)?,"minutes":minutes}),
         _ => return Err(anyhow::anyhow!("Выберите тип устройства.").into()),
     };
     db.invites
@@ -221,16 +227,36 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
     Ok(Json(data))
 }
 
+fn qr_image(link: &str) -> Result<String> {
+    let qr = qrcode::QrCode::new(link).context("Не удалось создать QR-код.")?;
+    let width = qr.width();
+    let mut svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {0} {0}' shape-rendering='crispEdges'><rect width='100%' height='100%' fill='white'/><path d='",
+        width + 8
+    );
+    use std::fmt::Write;
+    for y in 0..width {
+        for x in 0..width {
+            if qr[(x, y)] == qrcode::Color::Dark {
+                write!(&mut svg, "M{} {}h1v1h-1z", x + 4, y + 4).unwrap();
+            }
+        }
+    }
+    svg.push_str("'/></svg>");
+    use base64::engine::general_purpose::STANDARD;
+    Ok(format!(
+        "data:image/svg+xml;base64,{}",
+        STANDARD.encode(svg)
+    ))
+}
+
+fn pc_invitation(pending: &crate::short_code::Pending) -> Result<Value> {
+    let full = URL_SAFE_NO_PAD.encode(serde_json::to_vec(pending.invite())?);
+    Ok(json!({"code":pending.code(),"full":full,"remaining":pending.remaining(),"minutes":5}))
+}
+
 async fn certificate(State(app): State<App>) -> Api<Json<Value>> {
-    let encoded = app
-        .ca
-        .pem
-        .lines()
-        .filter(|line| !line.starts_with("-----"))
-        .collect::<String>();
-    let der = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .context("Не удалось прочитать сертификат.")?;
+    let der = app.ca.der()?;
     start_dialog(&app, move || {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Сохранить сертификат для телефона")
@@ -474,18 +500,21 @@ async fn action(
     let path = app.path(&item, true);
     let value = tokio::task::spawn_blocking(move || -> Result<Value> {
         match action.kind.as_str() {
-            "reveal" if item.text.is_none() => win::reveal(&path)?,
+            "reveal" if item.text.is_none() || item.stored_name.is_some() => win::reveal(&path)?,
             "copy" => {
                 if let Some(text) = item.text {
                     arboard::Clipboard::new()?.set_text(text)?;
                 } else if model::image_type(&item.name).is_some() {
-                    win::copy_file(&path, false)?;
+                    win::copy_image(&path).or_else(|_| win::copy_path(&path))?;
                 } else {
                     win::copy_path(&path)?;
                 }
             }
             "preview" if model::image_type(&item.name).is_some() => {
-                return Ok(json!(win::copy_file(&path, true)?));
+                return Ok(json!(win::image_url(&path, false)?));
+            }
+            "image" if model::image_type(&item.name).is_some() => {
+                return Ok(json!(win::image_url(&path, true)?));
             }
             _ => bail!("Действие недоступно."),
         }

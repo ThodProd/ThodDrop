@@ -1,6 +1,7 @@
 use crate::model::{self, Config, Upstream};
 use anyhow::{Context, Result, bail};
 use axum_server::tls_rustls::RustlsConfig;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use rcgen::{
     BasicConstraints, CertificateParams, GeneralSubtree, IsCa, Issuer, KeyPair, KeyUsagePurpose,
     NameConstraints,
@@ -59,6 +60,26 @@ pub struct Authority {
     key: String,
 }
 impl Authority {
+    pub fn der(&self) -> Result<Vec<u8>> {
+        let encoded = self
+            .pem
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect::<String>();
+        STANDARD
+            .decode(encoded)
+            .context("Не удалось прочитать сертификат.")
+    }
+
+    pub fn fingerprint(&self) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        Ok(Sha256::digest(self.der()?)
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<Vec<_>>()
+            .join(":"))
+    }
+
     pub fn load(root: &Path) -> Result<Self> {
         let path = root.join("authority.json");
         let authority: Self = model::read(&path)?;

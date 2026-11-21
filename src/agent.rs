@@ -9,10 +9,9 @@ use anyhow::{Context, Result};
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde::{Deserialize, Serialize};
 use std::{
-    io,
     net::{Ipv4Addr, SocketAddr},
     path::PathBuf,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{io::AsyncWriteExt, sync::watch};
 
@@ -113,6 +112,36 @@ async fn listen(app: &App, config: &Config, discovery: Option<&ServiceDaemon>) -
     let socket = net::lan_listener(ip, config.port)?;
     let tls = app.ca.tls(ip).await?;
     let service = axum_server::from_tcp_rustls(socket, tls.clone())?;
+    let bootstrap = config
+        .port
+        .checked_add(1)
+        .and_then(|port| net::lan_listener(ip, port).ok())
+        .map(Ok)
+        .unwrap_or_else(|| net::lan_listener(ip, 0))
+        .and_then(|socket| {
+            Ok((
+                socket.local_addr()?.port(),
+                tokio::net::TcpListener::from_std(socket)?,
+            ))
+        });
+    let mut bootstrap = std::pin::pin!(async {
+        match bootstrap {
+            Ok((port, socket)) => {
+                *app.certificate_url.lock().unwrap() =
+                    Some(format!("http://{ip}:{port}/certificate"));
+                axum::serve(
+                    socket,
+                    server::certificate_lan(app.clone(), ip, port)
+                        .into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await
+            }
+            Err(error) => {
+                eprintln!("Загрузка сертификата: {error}");
+                std::future::pending().await
+            }
+        }
+    });
     let fullname = config.host.simple().to_string();
     if let Some(discovery) = discovery {
         let service = mdns_sd::ServiceInfo::new(
@@ -134,9 +163,15 @@ async fn listen(app: &App, config: &Config, discovery: Option<&ServiceDaemon>) -
                 .into_make_service_with_connect_info::<SocketAddr>()
         )
     );
+    let mut bootstrap_running = true;
     let result = loop {
         tokio::select! {
             result = &mut server => break result,
+            result = &mut bootstrap, if bootstrap_running => {
+                bootstrap_running = false;
+                *app.certificate_url.lock().unwrap() = None;
+                if let Err(error) = result { eprintln!("Загрузка сертификата: {error}"); }
+            }
             _ = tokio::time::sleep(Duration::from_secs(90 * 24 * 60 * 60)) => {
                 match app.ca.tls(ip).await {
                     Ok(next) => tls.reload_from_config(next.get_inner()),
@@ -145,6 +180,7 @@ async fn listen(app: &App, config: &Config, discovery: Option<&ServiceDaemon>) -
             }
         }
     };
+    *app.certificate_url.lock().unwrap() = None;
     if let Some(discovery) = discovery {
         let _ = discovery.unregister(&format!("{fullname}.{}", net::SERVICE));
     }
@@ -153,25 +189,47 @@ async fn listen(app: &App, config: &Config, discovery: Option<&ServiceDaemon>) -
 }
 
 async fn browse(app: App, discovery: ServiceDaemon) {
-    let events = match discovery.browse(net::SERVICE) {
+    let mut events = match discovery.browse(net::SERVICE) {
         Ok(events) => events,
         Err(err) => {
             eprintln!("Поиск компьютеров: {err}");
             return;
         }
     };
-    while let Ok(event) = events.recv_async().await {
+    loop {
+        let event = tokio::select! {
+            event = events.recv_async() => match event {
+                Ok(event) => event,
+                Err(_) => break,
+            },
+            _ = app.rescan.notified() => {
+                match discovery.browse(net::SERVICE) {
+                    Ok(next) => {
+                        app.candidates.lock().unwrap().clear();
+                        events = next;
+                    }
+                    Err(err) => eprintln!("Поиск компьютеров: {err}"),
+                }
+                continue;
+            }
+        };
         match event {
             ServiceEvent::ServiceResolved(service) => {
-                let local = app.db.lock().unwrap().config.address;
+                let (local, host) = {
+                    let db = app.db.lock().unwrap();
+                    (
+                        db.config.address.or_else(net::default_address),
+                        db.config.host,
+                    )
+                };
+                let instance = service.get_fullname();
+                if instance.eq_ignore_ascii_case(&format!("{}.{}", host.simple(), net::SERVICE)) {
+                    continue;
+                }
                 let mut candidates = app.candidates.lock().unwrap();
-                candidates.retain(|_, candidate| {
-                    candidate
-                        .seen
-                        .is_some_and(|seen| seen.elapsed() < Duration::from_secs(150))
-                });
+                candidates.retain(|key, _| !key.starts_with(&format!("{instance}:")));
                 for address in service.get_addresses_v4() {
-                    if local.is_none_or(|ip| address == ip || !net::same_subnet(ip, address))
+                    if local.is_none_or(|ip| !net::same_subnet(ip, address))
                         || candidates.len() >= 64
                     {
                         continue;
@@ -179,11 +237,10 @@ async fn browse(app: App, discovery: ServiceDaemon) {
                     let name = service.get_property_val_str("name").unwrap_or("Компьютер");
                     let url = format!("https://{address}:{}", service.get_port());
                     candidates.insert(
-                        format!("{}:{address}", service.get_fullname()),
+                        format!("{instance}:{address}"),
                         Candidate {
                             url,
                             name: name.chars().take(64).collect(),
-                            seen: Some(Instant::now()),
                         },
                     );
                 }
@@ -293,14 +350,14 @@ async fn receive(
     app: &App,
     upstream: &Upstream,
     client: &reqwest::Client,
-    item: Item,
+    mut item: Item,
 ) -> Result<bool> {
     if app.db.lock().unwrap().local_items.contains_key(&item.id) {
         return Ok(false);
     }
-    if item.text.is_none() {
-        let path = app.path(&item, true);
-        tokio::fs::create_dir_all(path.parent().unwrap()).await?;
+    let temp = if let Some(text) = &item.text {
+        model::stage_text(&app.root, text)?
+    } else {
         let temp = tempfile::Builder::new()
             .prefix(".upload-")
             .tempfile_in(app.root.join("runtime"))?
@@ -330,16 +387,16 @@ async fn receive(
         anyhow::ensure!(size == item.size, "Получен неполный файл.");
         file.sync_all().await?;
         drop(file);
-        match tokio::fs::hard_link(&temp, path).await {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(err) => return Err(err.into()),
-        }
-    }
+        temp
+    };
     let mut db = app.db.lock().unwrap();
     let mut local = db.local_items.clone();
+    let path = app.save_inbox_file(&mut db, &mut item, &temp)?;
     local.insert(item.id, item);
-    app.save_items(&mut db, local, true)?;
+    if let Err(error) = app.save_items(&mut db, local, true) {
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
     Ok(true)
 }
 
