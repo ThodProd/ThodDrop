@@ -138,6 +138,9 @@ dialog p{overflow-wrap:anywhere}
 .phone .item-actions .icon-button,.phone .file-item .link-button{width:34px;min-height:34px}
 .phone .file-item .link-button{font-size:0;gap:0;padding:4px}
 .phone .transfer-head .link-button{min-height:30px}
+#save-file h2{overflow-wrap:anywhere}
+#save-photo{display:block;width:100%;max-height:44vh;object-fit:contain;border-radius:8px;margin-bottom:12px;-webkit-touch-callout:default}
+#save-file .actions{margin-top:12px}
 @media(max-width:760px){.desktop #transfers:not([hidden]){grid-template-columns:minmax(0,1fr)}}
 @media(max-width:590px){.desktop main{padding:20px 16px 32px}.desktop .top{flex-wrap:wrap;padding:8px 14px;gap:6px}.desktop .top nav{order:3;width:100%;gap:4px}.desktop nav button{padding-inline:8px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}

@@ -206,6 +206,87 @@ async function copyImage(item) {
   });
   await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
 }
+
+const appleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const saveDialog = $('save-file');
+const savePhoto = $('save-photo');
+const saveHint = $('save-hint');
+const saveShare = $('save-share');
+const shareLimit = 32 * 1024 ** 2;
+const shareTypes = {
+  jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp',
+  bmp:'image/bmp', heic:'image/heic', heif:'image/heif', tif:'image/tiff', tiff:'image/tiff',
+  avif:'image/avif', ico:'image/x-icon', pdf:'application/pdf', txt:'text/plain'
+};
+let saveRequest;
+let shareFile;
+saveDialog.addEventListener('close', () => {
+  if (saveDialog.open) return;
+  saveRequest?.abort();
+  shareFile = null;
+  savePhoto.removeAttribute('src');
+});
+saveShare.onclick = async () => {
+  if (!shareFile) return;
+  try { await navigator.share({files:[shareFile]}); }
+  catch (error) {
+    if (error.name !== 'AbortError') {
+      saveHint.textContent = savePhoto.hidden
+        ? 'Воспользуйтесь кнопкой «Скачать файл».'
+        : 'Удерживайте фото и выберите «Сохранить в Фото».';
+      saveHint.hidden = false;
+    }
+  }
+};
+async function showSave(name, href, bytes, preview) {
+  saveRequest?.abort();
+  const request = new AbortController();
+  saveRequest = request;
+  shareFile = null;
+  saveShare.hidden = true;
+  $('save-name').textContent = name;
+  $('save-download').href = href;
+  $('save-download').download = name;
+  savePhoto.hidden = !preview;
+  if (preview) {
+    savePhoto.alt = name;
+    savePhoto.onerror = () => {
+      savePhoto.hidden = true;
+      saveHint.hidden = true;
+    };
+    savePhoto.src = preview;
+  } else {
+    savePhoto.removeAttribute('src');
+  }
+  saveHint.textContent = preview ? 'Удерживайте фото и выберите «Сохранить в Фото».' : '';
+  saveHint.hidden = !preview;
+  if (!saveDialog.open) saveDialog.showModal();
+  if (!navigator.share || !navigator.canShare || bytes == null || bytes > shareLimit) return;
+  try {
+    const response = await fetch(href, {cache:'no-store', signal:request.signal});
+    if (!response.ok || Number(response.headers.get('content-length')) > shareLimit) return;
+    const blob = await response.blob();
+    if (request.signal.aborted || !saveDialog.open || blob.size > shareLimit) return;
+    const type = shareTypes[name.split('.').at(-1).toLowerCase()] || blob.type;
+    const file = new File([blob], name, {type});
+    if (navigator.canShare({files:[file]})) {
+      shareFile = file;
+      saveShare.hidden = false;
+    }
+  } catch {
+    // The download link and the iOS image menu are still available.
+  }
+}
+function saveAction(label, name, href, bytes, preview, compact = false) {
+  if (appleMobile) {
+    return button(label, () => showSave(name, href, bytes, preview), 'down', compact);
+  }
+  const link = download(label, href);
+  link.download = name;
+  return link;
+}
+
 function renderInbox() {
   const parent = $('items');
   renderBatches(parent, rows, item => {
@@ -235,13 +316,15 @@ function renderInbox() {
           try { await copyImage(item); notice('Скопировано.'); } catch (error) { failure(error); }
         }, 'copy', true));
       }
-      actions.push(download('Скачать', '/api/file/' + item.id));
+      const photo = imageFile(item.name);
+      actions.push(saveAction(photo && appleMobile ? 'Сохранить фото' : 'Скачать', item.name,
+        '/api/file/' + item.id, item.size, photo ? '/api/preview/' + item.id : null, true));
     }
     const trash = button('Удалить передачу', () => remove(item), 'remove', true);
     trash.classList.add('remove');
     return itemRow(item, [...actions, trash], picture);
   }, batch => batch.filter(item => item.text == null).length > 1
-    ? download('Скачать пакет ZIP', '/api/archive/' + batch[0].batch) : null);
+    ? saveAction('Скачать пакет ZIP', 'ThodDrop.zip', '/api/archive/' + batch[0].batch) : null);
   $('more').hidden = !more;
 }
 async function loadInbox(offset = 0) {

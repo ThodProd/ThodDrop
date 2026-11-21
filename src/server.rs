@@ -1005,6 +1005,16 @@ async fn stream_file(path: &Path, name: &str, mime: &str, inline: bool) -> Api<R
 
 fn stream(file: tokio::fs::File, size: u64, name: &str, mime: &str, inline: bool) -> Response {
     let disposition = if inline { "inline" } else { "attachment" };
+    let fallback: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ' ') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
     let name = percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC);
     (
         [
@@ -1012,7 +1022,7 @@ fn stream(file: tokio::fs::File, size: u64, name: &str, mime: &str, inline: bool
             (header::CONTENT_LENGTH, size.to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("{disposition}; filename*=UTF-8''{name}"),
+                format!("{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{name}"),
             ),
         ],
         Body::from_stream(ReaderStream::new(file)),
