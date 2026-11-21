@@ -1,6 +1,6 @@
 [package]
 name = "thoddrop"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2024"
 license-file = "LICENSE"
 
@@ -20,11 +20,13 @@ percent-encoding = "2"
 qrcode = { version = "0.14", default-features = false }
 rcgen = { version = "0.14", features = ["x509-parser"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+ring = "0.17"
 rfd = "0.15"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+spake2-conflux = "0.6"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }

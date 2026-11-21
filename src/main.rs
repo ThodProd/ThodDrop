@@ -6,6 +6,7 @@ mod model;
 mod net;
 mod phone;
 mod server;
+mod short_code;
 mod win;
 
 use anyhow::{Context, Result, bail};

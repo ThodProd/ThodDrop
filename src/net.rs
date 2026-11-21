@@ -111,13 +111,18 @@ pub fn url(config: &Config) -> Option<String> {
     Some(format!("https://{}:{}", config.address?, config.port))
 }
 
-pub fn peer_client(url: &str, ca: &str) -> Result<reqwest::Client> {
+pub fn private_endpoint(url: &str) -> Result<Ipv4Addr> {
     let address = reqwest::Url::parse(url)?;
     let host: Ipv4Addr = address.host_str().unwrap_or_default().parse()?;
     let port = address.port_or_known_default().context("Укажите порт.")?;
     if !host.is_private() || url != format!("https://{host}:{port}") {
         bail!("Адрес ведущего компьютера должен быть локальным HTTPS-адресом.")
     }
+    Ok(host)
+}
+
+pub fn peer_client(url: &str, ca: &str) -> Result<reqwest::Client> {
+    private_endpoint(url)?;
     Ok(reqwest::Client::builder()
         .use_rustls_tls()
         .tls_built_in_root_certs(false)

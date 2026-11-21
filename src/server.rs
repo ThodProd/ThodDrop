@@ -54,6 +54,7 @@ pub struct Database {
     pub local_items: Items,
     pub presence: HashMap<Uuid, Instant>,
     pub invites: HashMap<String, (String, Instant)>,
+    pub pc_code: Option<crate::short_code::Pending>,
     pub network_error: Option<String>,
     pub peer_error: Option<String>,
 }
@@ -157,6 +158,7 @@ impl Server {
             config,
             presence: HashMap::new(),
             invites: HashMap::new(),
+            pc_code: None,
             network_error: None,
             peer_error: None,
         };
@@ -255,6 +257,7 @@ pub fn lan(app: App, ip: Ipv4Addr, port: u16) -> Router {
     common()
         .merge(crate::phone::routes())
         .route("/api/pair", post(pair))
+        .route("/api/pc-code", post(crate::short_code::exchange))
         .layer(middleware::from_fn(move |req: Request, next: Next| {
             let app = layer_app.clone();
             let expected = expected.clone();
@@ -399,6 +402,7 @@ async fn pair(State(app): State<App>, Json(form): Json<Pair>) -> Api<Response> {
     db.invites.remove(&form.kind);
     db.presence.insert(id, Instant::now());
     if form.kind == "pc" {
+        db.pc_code = None;
         return Ok(Json(json!({"id":id,"token":token})).into_response());
     }
     let mut res = Json(json!({"id":id})).into_response();

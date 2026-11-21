@@ -178,6 +178,7 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
     let url = net::url(&db.config).context("Задайте локальный адрес в настройках.")?;
     let code = model::secret();
     let minutes = 5;
+    let expires = Instant::now() + Duration::from_secs(minutes * 60);
     let link = format!("{url}/#pair={code}");
     let data = match kind.kind.as_str() {
         "pc" => {
@@ -186,7 +187,13 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
                 ca: app.ca.pem.clone(),
                 code: code.clone(),
             };
-            json!({"code":URL_SAFE_NO_PAD.encode(serde_json::to_vec(&invite).context("Не удалось сформировать приглашение.")?),"minutes":minutes})
+            let full = URL_SAFE_NO_PAD.encode(
+                serde_json::to_vec(&invite).context("Не удалось сформировать приглашение.")?,
+            );
+            let pending = crate::short_code::Pending::new(invite, expires);
+            let data = json!({"code":pending.code(),"full":full,"minutes":minutes});
+            db.pc_code = Some(pending);
+            data
         }
         "phone" => {
             let qr = qrcode::QrCode::new(&link).context("Не удалось создать QR-код.")?;
@@ -209,13 +216,8 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
         }
         _ => return Err(anyhow::anyhow!("Выберите тип устройства.").into()),
     };
-    db.invites.insert(
-        kind.kind,
-        (
-            model::digest(&code),
-            Instant::now() + Duration::from_secs(minutes * 60),
-        ),
-    );
+    db.invites
+        .insert(kind.kind, (model::digest(&code), expires));
     Ok(Json(data))
 }
 
@@ -254,12 +256,33 @@ async fn join(State(app): State<App>, Json(request): Json<Join>) -> Api<Json<Val
     if request.code.len() > 8192 {
         return Err(anyhow::anyhow!("Приглашение слишком длинное.").into());
     }
-    let invite: Invite = serde_json::from_slice(
-        &URL_SAFE_NO_PAD
-            .decode(request.code.trim())
-            .context("Скопируйте приглашение с ведущего компьютера.")?,
-    )
-    .context("Приглашение повреждено.")?;
+    let invite: Invite = if let Some(code) = crate::short_code::normalize(&request.code) {
+        let url = request.candidate.as_deref().context(
+            "Выберите ведущий ПК в списке найденных компьютеров или вставьте полное приглашение.",
+        )?;
+        let remote = net::private_endpoint(url)?;
+        let local = app
+            .db
+            .lock()
+            .unwrap()
+            .config
+            .address
+            .or_else(net::default_address);
+        if !local.is_some_and(|local| net::same_subnet(local, remote)) {
+            return Err(anyhow::anyhow!(
+                "Ведущий ПК должен находиться в той же локальной подсети."
+            )
+            .into());
+        }
+        crate::short_code::redeem(url, &code).await?
+    } else {
+        serde_json::from_slice(
+            &URL_SAFE_NO_PAD
+                .decode(request.code.trim())
+                .context("Проверьте код или скопируйте полное приглашение с ведущего ПК.")?,
+        )
+        .context("Приглашение повреждено.")?
+    };
     let client = net::peer_client(&invite.url, &invite.ca)?;
     if request.candidate.is_some_and(|url| url != invite.url)
         || net::url(&app.db.lock().unwrap().config).as_deref() == Some(&invite.url)

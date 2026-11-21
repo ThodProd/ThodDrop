@@ -40,13 +40,18 @@
         </div>
         <div id="pc-invitation" class="invitation pc-invitation" hidden>
           <label for="pc-code"><strong>Код приглашения для ПК</strong></label>
-          <p>На втором компьютере откройте ThodDrop → «Подключение» → «Ввести приглашение» и вставьте код целиком.</p>
-          <textarea id="pc-code" rows="3" readonly spellcheck="false" aria-describedby="pc-code-status"></textarea>
+          <p>На втором ПК выберите этот компьютер в списке «Компьютеры в сети» и введите пять символов.</p>
+          <input id="pc-code" readonly spellcheck="false" aria-describedby="pc-code-status">
           <div class="actions">
             <button id="copy-pc-code"><span data-icon="copy"></span>Скопировать код</button>
             <button id="renew-pc-code">Создать новый код</button>
             <span id="pc-code-status" class="muted" role="status"></span>
           </div>
+          <details>
+            <summary>Компьютер не появляется в списке</summary>
+            <p>Скопируйте полное приглашение и вставьте его в окне «Ввести приглашение» на втором ПК.</p>
+            <button id="copy-full-pc-code"><span data-icon="copy"></span>Скопировать полное приглашение</button>
+          </details>
         </div>
       </div>
       <section class="subsection">

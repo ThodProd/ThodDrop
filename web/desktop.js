@@ -9,6 +9,7 @@ let tab = 'connect';
 let invitation;
 let expiration;
 let pcExpiration;
+let fullPcInvitation;
 let files = [];
 let entries = [];
 let hasMore = false;
@@ -90,8 +91,9 @@ async function invitePhone() {
 $('phone-invite').onclick = invitePhone;
 function clearPcCode(message = '') {
   clearTimeout(pcExpiration);
+  fullPcInvitation = null;
   $('pc-code').value = '';
-  $('copy-pc-code').disabled = true;
+  $('copy-pc-code').disabled = $('copy-full-pc-code').disabled = true;
   $('pc-code-status').textContent = message;
 }
 function closePcInvite() {
@@ -104,15 +106,18 @@ async function createPcCode() {
   $('pc-invite').setAttribute('aria-expanded', 'true');
   $('renew-pc-code').disabled = true;
   const previous = $('pc-code').value;
-  $('copy-pc-code').disabled = true;
+  $('copy-pc-code').disabled = $('copy-full-pc-code').disabled = true;
   try {
     const info = await call('invite', {kind:'pc'});
     clearPcCode('Одно использование · ' + info.minutes + ' мин');
     $('pc-code').value = info.code;
+    fullPcInvitation = info.full;
     $('copy-pc-code').disabled = false;
+    $('copy-full-pc-code').disabled = !fullPcInvitation;
     pcExpiration = setTimeout(() => clearPcCode('Код истёк. Создайте новый.'), info.minutes * 60000);
   } catch (error) {
     $('copy-pc-code').disabled = !previous || !$('pc-code').value;
+    $('copy-full-pc-code').disabled = !fullPcInvitation;
     failure(error);
   } finally { $('renew-pc-code').disabled = false; }
 }
@@ -125,6 +130,10 @@ $('copy-pc-code').onclick = async () => {
   const code = $('pc-code').value;
   if (!code) return;
   try { await copy(code); notice('Код приглашения скопирован.'); } catch (error) { failure(error); }
+};
+$('copy-full-pc-code').onclick = async () => {
+  if (!fullPcInvitation) return;
+  try { await copy(fullPcInvitation); notice('Полное приглашение скопировано.'); } catch (error) { failure(error); }
 };
 $('copy-invite').onclick = async () => {
   if (!invitation) return;
@@ -139,8 +148,10 @@ $('certificate').onclick = async () => {
 };
 async function join(candidate) {
   const answer = await ask({title:candidate ? 'Подключиться к ' + candidate.name : 'Подключить этот компьютер',
-    body:'На ведущем ПК откройте ThodDrop → «Подключение» → «Код приглашения для ПК». Нажмите «Скопировать код» и вставьте его сюда.',
-    field:'Код приглашения', action:'Подключить'});
+    body: candidate
+      ? 'Введите пять символов из раздела «Подключение» → «Код приглашения для ПК» на ведущем компьютере.'
+      : 'На ведущем ПК откройте «Подключение» → «Код приглашения для ПК» → «Компьютер не появляется в списке». Скопируйте полное приглашение и вставьте его сюда.',
+    field: candidate ? 'Код приглашения' : 'Полное приглашение', action:'Подключить'});
   if (!answer) return;
   try {
     await call('join', {code:answer.value, candidate:candidate?.url});

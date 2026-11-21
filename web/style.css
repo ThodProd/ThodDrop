@@ -65,7 +65,7 @@ details p{margin-top:9px}
 .invitation p{margin:4px 0 8px;color:var(--muted)}
 .pc-invitation{display:grid;gap:8px;margin-top:12px}
 .pc-invitation p{margin:0}
-#pc-code{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}
+#pc-code{width:11ch;font:600 22px ui-monospace,Consolas,monospace;letter-spacing:.17em}
 .attachments{margin:0;padding:0;list-style:none;max-height:155px;overflow:auto}
 .attachments li{display:flex;justify-content:space-between;align-items:center;gap:4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .item{padding:10px 0;border-bottom:1px solid var(--line)}
