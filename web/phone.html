@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/style.css">
   <title>ThodDrop</title>
   <script defer src="/common.js"></script>
-  <script defer src="/phone.js?v=2.0.7"></script>
+  <script defer src="/phone.js?v=2.0.8"></script>
 </head>
 <body class="phone">
   <header class="top"><span class="brand"><img src="/icon-192.png" alt="">ThodDrop</span><span id="connection" class="tag" aria-live="polite">Подключение…</span></header>
@@ -46,13 +46,13 @@
           <h2>Входящие</h2>
           <a id="download-photos" class="link-button" href="/api/photos.zip" download="ThodDrop-photos.zip" hidden><span data-icon="down"></span>Скачать все фото</a>
         </div>
-        <div id="items" class="inbox"></div>
+        <div id="items" class="inbox" tabindex="-1"></div>
         <button type="button" id="more" hidden>Показать ещё</button>
       </section>
     </div>
     <footer class="certificate-footer">
       <a class="link-button" id="certificate-link" href="/certificate">Установить сертификат</a>
-      <a class="link-button" href="/ThodDrop-WebClip.mobileconfig">Скачать значок для iPhone</a>
+      <small class="muted" id="ios-install-hint" hidden>На iPhone нажмите «Поделиться» → «Добавить на экран “Домой”».</small>
     </footer>
   </main>
   <dialog id="confirm">

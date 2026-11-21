@@ -61,12 +61,7 @@ function renderTargets(roster, rerender) {
   list.replaceChildren();
   if (!all.length) list.append(el('span', 'muted', 'Подключите устройство для отправки.'));
   for (const device of all) {
-    const node = deviceButton(device, rerender);
-    if (!device.online) {
-      node.append(el('small', '', 'Не в сети'));
-      node.title = 'Передача появится при следующем подключении';
-    }
-    list.append(node);
+    list.append(deviceButton(device, rerender));
   }
   $('send-button').disabled = !selected.size || list.closest('form').classList.contains('sending');
 }
@@ -77,6 +72,12 @@ function deviceButton(device, rerender) {
     rerender();
   }, device.kind === 'pc' ? 'pc' : 'phone');
   node.classList.add('recipient');
+  const status = device.online ? 'В сети' : 'Не в сети';
+  const dot = el('span', 'device-dot' + (device.online ? ' online' : ''));
+  dot.setAttribute('aria-hidden', 'true');
+  node.append(dot);
+  node.title = status;
+  node.setAttribute('aria-label', device.name + ', ' + status);
   node.setAttribute('aria-pressed', selected.has(device.id));
   return node;
 }

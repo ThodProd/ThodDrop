@@ -9,13 +9,27 @@ let refreshing = false;
 let refreshQueued = false;
 let pendingDelete;
 let inboxVersion;
+let pushReady = false;
+let pushPermission;
+let subscribeOnTap;
+let focusInbox = new URLSearchParams(location.search).has('inbox');
+const appleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const homeApp = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+$('ios-install-hint').hidden = !appleMobile || homeApp;
 function invitationCode(url) {
   return url.pathname.match(/^\/join\/([a-f0-9]{64})$/i)?.[1]
     || url.searchParams.get('pair') || new URLSearchParams(url.hash.slice(1)).get('pair');
 }
 let pairCode = invitationCode(new URL(location.href));
 if (location.protocol === 'http:') $('certificate-link').hidden = true;
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+const serviceWorker = navigator.serviceWorker;
+const workerReady = serviceWorker?.register('/sw.js').then(() => serviceWorker.ready).catch(() => null);
+serviceWorker?.addEventListener('message', event => {
+  if (event.data !== 'open-inbox') return;
+  focusInbox = true;
+  void refresh(true);
+});
 
 async function api(path, options = {}) {
   const response = await fetch(path, {cache:'no-store', ...options, headers:{'x-thoddrop':'1', ...options.headers}});
@@ -42,7 +56,69 @@ function setConnection(label, online) {
 function setPaired(paired) {
   $('pair').hidden = paired;
   $('main').hidden = !paired;
-  if (!paired) setConnection('Нужна привязка', false);
+  if (!paired) {
+    pushReady = false;
+    subscribeOnTap = undefined;
+    setConnection('Нужна привязка', false);
+  } else {
+    void preparePush();
+  }
+}
+
+function supportsPush() {
+  return window.isSecureContext && workerReady && 'PushManager' in window
+    && 'Notification' in window && (!appleMobile || homeApp);
+}
+
+function requestPushPermission() {
+  if (!supportsPush() || Notification.permission !== 'default' || pushPermission) return;
+  // Call synchronously from the existing tap so WebKit can show the system dialog.
+  pushPermission = Notification.requestPermission().then(permission => {
+    if (permission === 'granted' && !$('main').hidden) void preparePush();
+  }).catch(() => {});
+}
+
+document.addEventListener('click', event => {
+  if (!event.isTrusted || $('main').hidden || !event.target.closest('#main')) return;
+  if (event.target.closest('a, .file-button, .icon-button')) return;
+  if (subscribeOnTap) {
+    subscribeOnTap();
+  } else {
+    requestPushPermission();
+  }
+}, {capture:true});
+
+async function preparePush() {
+  if (!supportsPush() || Notification.permission !== 'granted' || pushReady) return;
+  pushReady = true;
+  try {
+    const [registration, state] = await Promise.all([workerReady, api('/api/push')]);
+    if (!registration) return;
+    const key = state.key.replace(/-/g, '+').replace(/_/g, '/');
+    const applicationServerKey = Uint8Array.from(atob(key.padEnd(Math.ceil(key.length / 4) * 4, '=')), character => character.charCodeAt(0));
+    const options = {userVisibleOnly:true, applicationServerKey};
+    let subscription = await registration.pushManager.getSubscription();
+    const existingKey = subscription?.options?.applicationServerKey;
+    const existingBytes = existingKey && new Uint8Array(existingKey);
+    if (existingBytes && (existingBytes.length !== applicationServerKey.length ||
+        existingBytes.some((byte, index) => byte !== applicationServerKey[index]))) {
+      await subscription.unsubscribe();
+      subscription = null;
+    }
+    const save = subscription => post('/api/push', subscription.toJSON());
+    try {
+      await save(subscription || await registration.pushManager.subscribe(options));
+    } catch (error) {
+      if (error.name !== 'NotAllowedError' || Notification.permission !== 'granted') throw error;
+      // Some browsers also require a tap when creating a subscription after permission was granted.
+      subscribeOnTap = () => {
+        subscribeOnTap = undefined;
+        registration.pushManager.subscribe(options).then(save).catch(() => {});
+      };
+    }
+  } catch (error) {
+    console.warn('Не удалось зарегистрировать уведомления ThodDrop.', error.name);
+  }
 }
 $('pair-form').hidden = false;
 if (pairCode) $('pair-help').textContent = 'Введите имя, которое будут видеть другие устройства.';
@@ -65,8 +141,10 @@ $('pair-form').addEventListener('submit', async event => {
     if (url && url.origin !== location.origin) throw new Error('Откройте веб-приложение ведущего компьютера, который создал приглашение.');
     const code = pairCode || invitationCode(url);
     if (!code) throw new Error('В ссылке нет кода привязки.');
+    requestPushPermission();
     await post('/api/pair', {name:$('device-name').value, code, kind:'phone'});
     if (pairCode) {
+      await pushPermission;
       history.replaceState(null, '', '/');
       setTimeout(() => location.reload(), 0);
       return;
@@ -207,8 +285,6 @@ async function copyImage(item) {
   await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);
 }
 
-const appleMobile = /iPhone|iPad|iPod/.test(navigator.userAgent)
-  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const saveDialog = $('save-file');
 const savePhoto = $('save-photo');
 const saveHint = $('save-hint');
@@ -368,6 +444,11 @@ async function refresh(force = false) {
     setPaired(true);
     setConnection('В сети', true);
     await loadInbox();
+    if (focusInbox) {
+      focusInbox = false;
+      $('items').focus({preventScroll:true});
+      $('items').scrollIntoView({block:'start'});
+    }
   } catch (error) {
     if (error.message !== 'Подключите телефон к ThodDrop.') {
       setConnection('Нет связи', false);

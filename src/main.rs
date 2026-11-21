@@ -5,6 +5,7 @@ mod desktop;
 mod model;
 mod net;
 mod phone;
+mod push;
 mod server;
 mod short_code;
 mod win;

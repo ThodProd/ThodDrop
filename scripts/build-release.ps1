@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$HubRoot = (Join-Path $PSScriptRoot '../../..'),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '../dist-release/rust')
 )
@@ -34,4 +34,4 @@ foreach ($asset in @('style.css', 'common.js', 'desktop.js', 'icon-192.png')) {
 Copy-Item -LiteralPath (Join-Path $root 'sdk/thodhub.js') -Destination $ui.FullName
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $stage
 & $packageScript -PackageDirectory $stage -Repository 'ThodProd/ThodDrop' -OutputDirectory $OutputDirectory `
-    -Notes 'Кнопка «Скачать все фото» собирает изображения из всех входящих сообщений в один ZIP.'
+    -Notes 'Уведомления о входящих передачах на телефоне по HTTPS. Зелёные и красные индикаторы устройств и короткая подсказка по добавлению ThodDrop на экран «Домой».'

@@ -52,9 +52,10 @@ fieldset .muted{margin:0}
 .recipient[aria-pressed=true]{background:var(--selected);color:var(--accent);border-color:var(--accent)}
 .device{display:flex;align-items:center;gap:8px;min-height:46px;padding:5px 0;border-bottom:1px solid var(--line)}
 .device:last-child{border-bottom:0}
-.device .state{color:var(--muted);font-size:12px;flex:1}
-.device .state.online{color:var(--green)}
 .device .recipient{justify-content:start}
+.device-dot{display:inline-block;width:8px;height:8px;flex:none;margin-inline-start:3px;border-radius:50%;background:var(--red)}
+.device-dot.online{background:var(--green)}
+.device>.recipient{margin-right:auto}
 .device .recipient:disabled{opacity:.8}
 .devices{margin:0 0 12px}
 .certificate-footer{display:flex;gap:8px;flex-wrap:wrap;margin-top:24px}
@@ -88,7 +89,6 @@ details p{margin-top:9px}
 .drop-zone.dragging{background:var(--selected);border-color:var(--accent)}
 .candidate{gap:10px 16px;padding:10px 0;flex-wrap:wrap}
 .candidate-info{display:grid;gap:3px;flex:1 1 180px;min-width:0;overflow-wrap:anywhere}
-.candidate .state{flex:none}
 #manual-join{margin-top:8px}
 #settings-status{margin:0}
 #settings-status.error{color:var(--red)}

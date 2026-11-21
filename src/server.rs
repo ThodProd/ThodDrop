@@ -53,6 +53,7 @@ pub struct Server {
     pub archives: Semaphore,
     pub restart: std::sync::atomic::AtomicBool,
     pub notifications: tokio::sync::mpsc::Sender<usize>,
+    pub push: Option<crate::push::Push>,
 }
 
 pub struct Database {
@@ -190,6 +191,9 @@ impl Server {
         };
         let (notifications, receiver) = tokio::sync::mpsc::channel(128);
         tokio::spawn(win::notifications(receiver));
+        let push = crate::push::Push::load(&root)
+            .map_err(|error| eprintln!("Мобильные уведомления: {error}"))
+            .ok();
         Ok(Arc::new(Self {
             ca: net::Authority::load(&root)?,
             root,
@@ -209,6 +213,7 @@ impl Server {
             archives: Semaphore::new(2),
             restart: false.into(),
             notifications,
+            push,
         }))
     }
 
@@ -463,6 +468,11 @@ pub fn forget_device(app: &App, db: &mut Database, id: Uuid) -> Result<()> {
     let mut devices = db.devices.clone();
     devices.remove(&id);
     app.save_devices(db, devices)?;
+    if let Some(push) = &app.push
+        && let Err(error) = push.forget(id)
+    {
+        eprintln!("Удаление подписки: {error}");
+    }
     db.presence.remove(&id);
     if db.shared.contains_key(&id) {
         let mut shared = db.shared.clone();
@@ -529,7 +539,14 @@ pub fn web_lan(app: App, ip: Ipv4Addr, port: u16, plain: bool) -> Router {
             .route("/api/text", post(send_text))
             .route("/api/upload", post(upload))
     } else {
-        common().route("/api/pc-code", post(crate::short_code::exchange))
+        common()
+            .route("/api/pc-code", post(crate::short_code::exchange))
+            .route(
+                "/api/push",
+                get(crate::push::state)
+                    .post(crate::push::subscribe)
+                    .delete(crate::push::unsubscribe),
+            )
     };
     routes
         .merge(crate::phone::routes())
@@ -1181,6 +1198,7 @@ fn store(
     }
     let mut items = db.items.clone();
     let mut paths = Vec::new();
+    let mut committed = Vec::with_capacity(to.len());
     let text_file = match text.as_ref().filter(|_| to.contains(&db.config.host)) {
         Some(text) => Some(model::stage_text(&app.root, text)?),
         None => None,
@@ -1220,6 +1238,7 @@ fn store(
                 }
                 paths.push(path);
             }
+            committed.push(item.id);
             items.insert(item.id, item);
         }
         app.save_items(&mut db, items, false)
@@ -1231,6 +1250,14 @@ fn store(
         }
     }
     result?;
+    if let Some(push) = &app.push {
+        for id in committed {
+            let item = &db.items[&id];
+            if item.relay_to.is_none() {
+                push.notify(item);
+            }
+        }
+    }
     if to.contains(&db.config.host) {
         let _ = app.notifications.try_send(1);
     }
@@ -1441,12 +1468,19 @@ pub fn accept_relay(app: &App, mut item: Item, source: Option<&Path>) -> Result<
         }
     }
     let mut items = db.items.clone();
-    items.insert(item.id, item);
+    let id = item.id;
+    items.insert(id, item);
     if let Err(error) = app.save_items(&mut db, items, false) {
         if source.is_some() {
             let _ = std::fs::remove_file(path);
         }
         return Err(error);
+    }
+    if let Some(push) = &app.push {
+        let item = &db.items[&id];
+        if item.relay_to.is_none() {
+            push.notify(item);
+        }
     }
     Ok(())
 }

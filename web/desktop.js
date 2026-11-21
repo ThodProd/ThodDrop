@@ -263,7 +263,7 @@ function renderRoster() {
   if (!devices.length) list.append(el('p', 'muted', 'Подключённых устройств пока нет.'));
   for (const device of devices) {
     const row = el('div', 'device');
-    row.append(deviceButton(device, renderRoster), el('span', 'state' + (device.online ? ' online' : ''), device.online ? 'В сети' : 'Не в сети'));
+    row.append(deviceButton(device, renderRoster));
     if (device.managed) {
       row.append(button('Переименовать', () => editDevice(device, false), 'edit', true));
       const revoke = button(device.kind === 'pc' ? 'Забыть компьютер' : 'Удалить устройство', () => editDevice(device, true), 'remove', true);
