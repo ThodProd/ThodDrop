@@ -140,32 +140,52 @@ async fn listen(app: &App, config: &mut Config, discovery: Option<&ServiceDaemon
     };
     let tls = app.ca.tls(ip).await?;
     let service = axum_server::from_tcp_rustls(socket, tls.clone())?;
-    let bootstrap = config
-        .port
-        .checked_add(1)
-        .and_then(|port| net::lan_listener(ip, port).ok())
-        .map(Ok)
-        .unwrap_or_else(|| net::lan_listener(ip, 0))
-        .and_then(|socket| {
-            Ok((
-                socket.local_addr()?.port(),
-                tokio::net::TcpListener::from_std(socket)?,
-            ))
-        });
+    let bootstrap = if let Some(port) = config.phone_port.filter(|_| config.phone_http) {
+        net::lan_listener(ip, port)
+    } else {
+        config
+            .port
+            .checked_add(1)
+            .and_then(|port| net::lan_listener(ip, port).ok())
+            .map(Ok)
+            .unwrap_or_else(|| net::lan_listener(ip, 0))
+    }
+    .and_then(|socket| {
+        Ok((
+            socket.local_addr()?.port(),
+            tokio::net::TcpListener::from_std(socket)?,
+        ))
+    });
+    let phone_http = config.phone_http;
     let mut bootstrap = std::pin::pin!(async {
         match bootstrap {
             Ok((port, socket)) => {
+                if phone_http {
+                    let mut db = app.db.lock().unwrap();
+                    if db.config.phone_port != Some(port) {
+                        let mut config = db.config.clone();
+                        config.phone_port = Some(port);
+                        if let Err(error) = app.save_config(&mut db, config) {
+                            eprintln!("Адрес телефона: {error}");
+                        }
+                    }
+                    *app.phone_http_url.lock().unwrap() = Some(format!("http://{ip}:{port}"));
+                }
                 *app.certificate_url.lock().unwrap() =
                     Some(format!("http://{ip}:{port}/certificate"));
+                let router = if phone_http {
+                    server::web_lan(app.clone(), ip, port, true)
+                } else {
+                    server::certificate_lan(app.clone(), ip, port)
+                };
                 axum::serve(
                     socket,
-                    server::certificate_lan(app.clone(), ip, port)
-                        .into_make_service_with_connect_info::<SocketAddr>(),
+                    router.into_make_service_with_connect_info::<SocketAddr>(),
                 )
                 .await
             }
             Err(error) => {
-                eprintln!("Загрузка сертификата: {error}");
+                eprintln!("Адрес телефона: {error}");
                 std::future::pending().await
             }
         }
@@ -198,6 +218,7 @@ async fn listen(app: &App, config: &mut Config, discovery: Option<&ServiceDaemon
             result = &mut bootstrap, if bootstrap_running => {
                 bootstrap_running = false;
                 *app.certificate_url.lock().unwrap() = None;
+                *app.phone_http_url.lock().unwrap() = None;
                 if let Err(error) = result { eprintln!("Загрузка сертификата: {error}"); }
             }
             _ = tokio::time::sleep(Duration::from_secs(90 * 24 * 60 * 60)) => {
@@ -209,6 +230,7 @@ async fn listen(app: &App, config: &mut Config, discovery: Option<&ServiceDaemon
         }
     };
     *app.certificate_url.lock().unwrap() = None;
+    *app.phone_http_url.lock().unwrap() = None;
     if let Some(discovery) = discovery {
         let _ = discovery.unregister(&format!("{fullname}.{}", net::SERVICE));
     }
@@ -300,16 +322,35 @@ async fn sync(app: App, upstream: Upstream) {
         let client = client.clone();
         async move {
             loop {
-                let (roster, message) = match net::peer_request(
-                    &client,
-                    &upstream,
-                    reqwest::Method::POST,
-                    "/api/presence",
-                )
-                .timeout(Duration::from_secs(4))
-                .send()
-                .await
+                let share_guard = app.share_gate.lock().await;
+                let devices = server::published_devices(&app.db.lock().unwrap());
+                let mut sharing = true;
+                let mut response =
+                    net::peer_request(&client, &upstream, reqwest::Method::POST, "/api/share")
+                        .timeout(Duration::from_secs(4))
+                        .json(&devices)
+                        .send()
+                        .await;
+                if response
+                    .as_ref()
+                    .is_ok_and(|reply| reply.status() == reqwest::StatusCode::NOT_FOUND)
                 {
+                    sharing = false;
+                    response = net::peer_request(
+                        &client,
+                        &upstream,
+                        reqwest::Method::POST,
+                        "/api/presence",
+                    )
+                    .timeout(Duration::from_secs(4))
+                    .send()
+                    .await;
+                }
+                drop(share_guard);
+                let revoked = response
+                    .as_ref()
+                    .is_ok_and(|reply| reply.status() == reqwest::StatusCode::UNAUTHORIZED);
+                let (roster, message) = match response {
                     Ok(reply) if reply.status().is_success() => match reply.json().await {
                         Ok(roster) => (Some(roster), None),
                         Err(_) => (None, Some("Не удалось прочитать список устройств.".into())),
@@ -321,8 +362,26 @@ async fn sync(app: App, upstream: Upstream) {
                 };
                 let rename = {
                     let mut db = app.db.lock().unwrap();
+                    if !db.config.upstream.as_ref().is_some_and(|current| {
+                        current.device == upstream.device && current.url == upstream.url
+                    }) {
+                        return;
+                    }
+                    if revoked {
+                        db.peer_roster = None;
+                        db.peer_sharing = false;
+                        let _ = std::fs::remove_file(app.root.join("peer-roster-v3.json"));
+                    }
                     if let Some(roster) = roster {
+                        if db.peer_roster.as_ref() != Some(&roster) {
+                            if let Err(error) =
+                                model::write(&app.root.join("peer-roster-v3.json"), &roster)
+                            {
+                                eprintln!("Список устройств: {error}");
+                            }
+                        }
                         db.peer_roster = Some(roster);
+                        db.peer_sharing = sharing;
                     }
                     let rename = if message.is_none() && db.config.rename_pending {
                         Some(db.config.name.clone())
@@ -383,7 +442,7 @@ async fn sync_inbox(app: &App, upstream: &Upstream, client: &reqwest::Client) ->
     let mut count = 0;
     for item in page.items {
         anyhow::ensure!(
-            item.recipient == upstream.device,
+            item.recipient == upstream.device || item.relay_to == Some(upstream.device),
             "Адресат передачи изменился."
         );
         let id = item.id;
@@ -413,10 +472,18 @@ async fn receive(
     client: &reqwest::Client,
     mut item: Item,
 ) -> Result<bool> {
-    if app.db.lock().unwrap().local_items.contains_key(&item.id) {
-        return Ok(false);
+    let for_pc = item.recipient == upstream.device;
+    {
+        let db = app.db.lock().unwrap();
+        if db.local_items.contains_key(&item.id) || db.items.contains_key(&item.id) {
+            return Ok(false);
+        }
     }
     let temp = if let Some(text) = &item.text {
+        if !for_pc {
+            server::accept_relay(app, item, None)?;
+            return Ok(false);
+        }
         model::stage_text(&app.root, text)?
     } else {
         let temp = tempfile::Builder::new()
@@ -450,6 +517,11 @@ async fn receive(
         drop(file);
         temp
     };
+    if !for_pc {
+        server::accept_relay(app, item, Some(&temp))?;
+        return Ok(false);
+    }
+    item.relay_to = None;
     let mut db = app.db.lock().unwrap();
     let mut local = db.local_items.clone();
     let path = app.save_inbox_file(&mut db, &mut item, &temp)?;

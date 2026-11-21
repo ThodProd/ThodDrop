@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Extension, Path as AxumPath, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -26,7 +26,10 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::{
-    model::{self, Config, Device, Devices, Item, Items, MAX_FILE, MAX_ITEMS, MAX_STORAGE},
+    model::{
+        self, Config, Device, Devices, Item, Items, MAX_FILE, MAX_ITEMS, MAX_STORAGE, PublicDevice,
+        Upstream,
+    },
     net, win,
 };
 
@@ -44,6 +47,8 @@ pub struct Server {
     pub candidates: Mutex<HashMap<String, Candidate>>,
     pub rescan: tokio::sync::Notify,
     pub certificate_url: Mutex<Option<String>>,
+    pub phone_http_url: Mutex<Option<String>>,
+    pub share_gate: tokio::sync::Mutex<()>,
     pub uploads: Semaphore,
     pub archives: Semaphore,
     pub restart: std::sync::atomic::AtomicBool,
@@ -62,6 +67,8 @@ pub struct Database {
     pub network_error: Option<String>,
     pub peer_error: Option<String>,
     pub peer_roster: Option<Value>,
+    pub peer_sharing: bool,
+    pub shared: BTreeMap<Uuid, Vec<PublicDevice>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -76,6 +83,8 @@ pub struct Job {
     pub total: usize,
     pub finished: bool,
     pub error: Option<String>,
+    pub file_progress: u64,
+    pub file_size: u64,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -154,6 +163,16 @@ impl Server {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
+        let peer_roster = config.upstream.as_ref().and_then(|upstream| {
+            model::read::<Option<Value>>(&root.join("peer-roster-v3.json"))
+                .ok()
+                .flatten()
+                .filter(|roster| roster["self"] == json!(upstream.device))
+        });
+        let peer_error = config
+            .upstream
+            .as_ref()
+            .map(|_| "Подключение к ведущему компьютеру…".into());
         let db = Database {
             devices: model::read(&root.join("devices-v2.json"))?,
             items: model::read(&root.join("transfers-v2.json"))?,
@@ -164,8 +183,10 @@ impl Server {
             invites: HashMap::new(),
             pc_code: None,
             network_error: None,
-            peer_error: None,
-            peer_roster: None,
+            peer_error,
+            peer_roster,
+            peer_sharing: false,
+            shared: model::read(&root.join("shared-devices-v3.json"))?,
         };
         let (notifications, receiver) = tokio::sync::mpsc::channel(128);
         tokio::spawn(win::notifications(receiver));
@@ -182,6 +203,8 @@ impl Server {
             candidates: Mutex::default(),
             rescan: tokio::sync::Notify::new(),
             certificate_url: Mutex::default(),
+            phone_http_url: Mutex::default(),
+            share_gate: tokio::sync::Mutex::new(()),
             uploads: Semaphore::new(4),
             archives: Semaphore::new(2),
             restart: false.into(),
@@ -298,25 +321,175 @@ impl Server {
 
     pub fn roster(&self, principal: Uuid) -> Value {
         let db = self.db.lock().unwrap();
-        let mut devices = vec![];
-        for device in db.devices.values() {
-            let online = db
-                .presence
-                .get(&device.id)
-                .is_some_and(|last| last.elapsed() < Duration::from_secs(12));
-            devices.push(
-                json!({"id":device.id,"name":device.name,"kind":device.kind,"online":online}),
-            );
+        let mut devices = published_devices(&db);
+        let mut seen: HashSet<Uuid> = devices.iter().map(|device| device.id).collect();
+        seen.insert(db.config.host);
+        if let Some(peer) = &db.peer_roster
+            && let Some(remote) = peer["devices"].as_array()
+        {
+            let relay = db.config.upstream.as_ref().map(|upstream| upstream.device);
+            for device in remote {
+                let Ok(mut device) = serde_json::from_value::<PublicDevice>(device.clone()) else {
+                    continue;
+                };
+                if relay != Some(device.id) && seen.insert(device.id) {
+                    device.online &= db.peer_error.is_none();
+                    devices.push(device);
+                }
+            }
         }
-        devices.push(json!({"id":db.config.host,"name":db.config.name,"kind":"pc","online":true}));
+        devices.push(PublicDevice {
+            id: db.config.host,
+            name: db.config.name.clone(),
+            kind: "pc".into(),
+            online: true,
+        });
         json!({"self":principal,"devices":devices})
     }
+}
+
+fn online(db: &Database, id: Uuid) -> bool {
+    db.presence
+        .get(&id)
+        .is_some_and(|last| last.elapsed() < Duration::from_secs(12))
+}
+
+pub fn published_devices(db: &Database) -> Vec<PublicDevice> {
+    let mut devices = db
+        .devices
+        .values()
+        .map(|device| PublicDevice {
+            id: device.id,
+            name: device.name.clone(),
+            kind: device.kind.clone(),
+            online: online(db, device.id),
+        })
+        .collect::<Vec<_>>();
+    for (owner, shared) in &db.shared {
+        if !db.devices.contains_key(owner) {
+            continue;
+        }
+        let connected = online(db, *owner);
+        devices.extend(shared.iter().cloned().map(|mut device| {
+            device.online &= connected;
+            device
+        }));
+    }
+    devices
+}
+
+pub fn relay_owner(db: &Database, id: Uuid) -> Option<Uuid> {
+    db.shared.iter().find_map(|(owner, devices)| {
+        (db.devices.contains_key(owner) && devices.iter().any(|device| device.id == id))
+            .then_some(*owner)
+    })
+}
+
+fn is_pc(db: &Database, id: Uuid) -> bool {
+    db.devices
+        .get(&id)
+        .is_some_and(|device| device.kind == "pc")
+}
+
+async fn share(
+    State(app): State<App>,
+    Principal(owner): Principal,
+    Json(mut devices): Json<Vec<PublicDevice>>,
+) -> Api<Json<Value>> {
+    if devices.len() > 128 {
+        return Err(anyhow::anyhow!("Слишком много устройств в группе.").into());
+    }
+    devices.sort_by_key(|device| device.id);
+    let mut ids = HashSet::new();
+    let mut db = app.db.lock().unwrap();
+    if !is_pc(&db, owner) {
+        return Err(denied());
+    }
+    for device in &mut devices {
+        device.name = model::name(&device.name)?;
+        if !matches!(device.kind.as_str(), "pc" | "phone")
+            || device.id.is_nil()
+            || device.id == db.config.host
+            || !ids.insert(device.id)
+            || db.devices.contains_key(&device.id)
+            || db
+                .config
+                .upstream
+                .as_ref()
+                .is_some_and(|peer| peer.device == device.id)
+            || relay_owner(&db, device.id).is_some_and(|registered| registered != owner)
+        {
+            return Err(anyhow::anyhow!("В группе совпали идентификаторы устройств.").into());
+        }
+    }
+    if db.shared.get(&owner) != Some(&devices) {
+        let mut shared = db.shared.clone();
+        shared.insert(owner, devices);
+        if shared.values().map(Vec::len).sum::<usize>() > 256 {
+            return Err(anyhow::anyhow!("Слишком много устройств в группе.").into());
+        }
+        model::write(&app.root.join("shared-devices-v3.json"), &shared)?;
+        db.shared = shared;
+        purge_items(&app, &mut db, |item| {
+            item.relay_to == Some(owner) && !ids.contains(&item.recipient)
+        })?;
+    }
+    db.presence.insert(owner, Instant::now());
+    drop(db);
+    Ok(Json(app.roster(owner)))
+}
+
+fn purge_items(app: &App, db: &mut Database, mut remove: impl FnMut(&Item) -> bool) -> Result<()> {
+    let mut items = db.items.clone();
+    let removed = items
+        .extract_if(.., |_, item| remove(item))
+        .map(|(_, item)| item)
+        .collect::<Vec<_>>();
+    if removed.is_empty() {
+        return Ok(());
+    }
+    app.save_items(db, items, false)?;
+    for item in removed {
+        if item.text.is_none() {
+            let path = app.path(&item, false);
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(path.parent().unwrap());
+        }
+    }
+    Ok(())
+}
+
+pub fn forget_device(app: &App, db: &mut Database, id: Uuid) -> Result<()> {
+    let mut devices = db.devices.clone();
+    devices.remove(&id);
+    app.save_devices(db, devices)?;
+    db.presence.remove(&id);
+    if db.shared.contains_key(&id) {
+        let mut shared = db.shared.clone();
+        shared.remove(&id);
+        model::write(&app.root.join("shared-devices-v3.json"), &shared)?;
+        db.shared = shared;
+    }
+    purge_items(app, db, |item| {
+        item.recipient == id || item.relay_to == Some(id)
+    })
+}
+
+async fn unpair(State(app): State<App>, Principal(id): Principal) -> Api<StatusCode> {
+    let mut db = app.db.lock().unwrap();
+    if !is_pc(&db, id) {
+        return Err(denied());
+    }
+    forget_device(&app, &mut db, id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub fn common() -> Router<App> {
     Router::new()
         .route("/api/roster", get(roster))
         .route("/api/presence", post(heartbeat))
+        .route("/api/share", post(share))
+        .route("/api/unpair", post(unpair))
         .route("/api/items", get(items))
         .route("/api/pending", get(pending))
         .route("/api/delivered", post(delivered))
@@ -331,18 +504,48 @@ pub fn common() -> Router<App> {
 }
 
 pub fn lan(app: App, ip: Ipv4Addr, port: u16) -> Router {
+    web_lan(app, ip, port, false)
+}
+
+#[derive(Clone, Copy)]
+pub struct WebHttp(pub bool);
+
+pub fn web_lan(app: App, ip: Ipv4Addr, port: u16, plain: bool) -> Router {
     let expected = format!("{ip}:{port}");
     let mask = net::subnet_mask(ip);
     let layer_app = app.clone();
-    common()
+    let routes = if plain {
+        // Laptop-to-laptop credentials and relay administration require HTTPS.
+        Router::new()
+            .route("/api/presence", post(heartbeat))
+            .route("/api/items", get(items))
+            .route("/api/items/{id}", delete(remove_item))
+            .route("/api/file/{id}", get(download))
+            .route("/api/preview/{id}", get(preview))
+            .route("/api/thumbnail/{id}", get(thumbnail))
+            .route("/api/archive/{batch}", get(archive))
+            .route("/api/text", post(send_text))
+            .route("/api/upload", post(upload))
+    } else {
+        common().route("/api/pc-code", post(crate::short_code::exchange))
+    };
+    routes
         .merge(crate::phone::routes())
         .route("/api/pair", post(pair))
-        .route("/api/pc-code", post(crate::short_code::exchange))
         .layer(middleware::from_fn(move |req: Request, next: Next| {
             let app = layer_app.clone();
             let expected = expected.clone();
             async move {
-                if !lan_request(&req, ip, port == 443, mask, &expected) {
+                if !lan_request(
+                    &req,
+                    ip,
+                    port == if plain { 80 } else { 443 },
+                    mask,
+                    &expected,
+                ) {
+                    return StatusCode::FORBIDDEN.into_response();
+                }
+                if plain && !app.db.lock().unwrap().config.phone_http {
                     return StatusCode::FORBIDDEN.into_response();
                 }
                 if req.method() != axum::http::Method::GET
@@ -351,9 +554,10 @@ pub fn lan(app: App, ip: Ipv4Addr, port: u16) -> Router {
                     return StatusCode::FORBIDDEN.into_response();
                 }
                 let mut req = req;
-                if let Some(principal) = identify(&app, req.headers()) {
+                if let Some(principal) = identify(&app, req.headers(), plain) {
                     req.extensions_mut().insert(Principal(principal));
                 }
+                req.extensions_mut().insert(WebHttp(plain));
                 secure(next.run(req).await)
             }
         }))
@@ -447,25 +651,28 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .ok()?
         .strip_prefix("Bearer ")
 }
-fn identify(app: &App, headers: &HeaderMap) -> Option<Uuid> {
-    let token = bearer(headers).or_else(|| {
+fn identify(app: &App, headers: &HeaderMap, plain: bool) -> Option<Uuid> {
+    let prefix = if plain {
+        "thoddrop-lan="
+    } else {
+        "__Host-thoddrop="
+    };
+    let token = (!plain).then(|| bearer(headers)).flatten().or_else(|| {
         headers
             .get(header::COOKIE)?
             .to_str()
             .ok()?
             .split(';')
-            .find_map(|cookie| cookie.trim().strip_prefix("__Host-thoddrop="))
+            .find_map(|cookie| cookie.trim().strip_prefix(prefix))
     })?;
     if token.len() != 64 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
     let hash = model::digest(token);
-    app.db
-        .lock()
-        .unwrap()
-        .devices
-        .values()
-        .find_map(|device| (device.token_hash.as_deref() == Some(&hash)).then_some(device.id))
+    app.db.lock().unwrap().devices.values().find_map(|device| {
+        (device.web_http == plain && device.token_hash.as_deref() == Some(&hash))
+            .then_some(device.id)
+    })
 }
 
 #[derive(Deserialize)]
@@ -474,16 +681,25 @@ struct Pair {
     name: String,
     kind: String,
 }
-async fn pair(State(app): State<App>, Json(form): Json<Pair>) -> Api<Response> {
+async fn pair(
+    State(app): State<App>,
+    Extension(WebHttp(plain)): Extension<WebHttp>,
+    Json(form): Json<Pair>,
+) -> Api<Response> {
     let name = model::name(&form.name)?;
-    if !matches!(form.kind.as_str(), "phone" | "pc") {
+    if !matches!(form.kind.as_str(), "phone" | "pc") || (plain && form.kind != "phone") {
         return Err(denied());
     }
     let mut db = app.db.lock().unwrap();
     let code = model::digest(&form.code);
+    let kind = if plain {
+        "phone-http"
+    } else {
+        form.kind.as_str()
+    };
     if !db
         .invites
-        .get(&form.kind)
+        .get(kind)
         .is_some_and(|(hash, until)| *hash == code && *until > Instant::now())
     {
         return Err(ApiError(
@@ -501,24 +717,27 @@ async fn pair(State(app): State<App>, Json(form): Json<Pair>) -> Api<Response> {
         name,
         kind: form.kind.clone(),
         token_hash: Some(model::digest(&token)),
+        web_http: plain,
     };
     let mut devices = db.devices.clone();
     devices.insert(id, device);
     app.save_devices(&mut db, devices)?;
-    db.invites.remove(&form.kind);
+    db.invites.remove(kind);
     db.presence.insert(id, Instant::now());
     if form.kind == "pc" {
         db.pc_code = None;
         return Ok(Json(json!({"id":id,"token":token})).into_response());
     }
     let mut res = Json(json!({"id":id})).into_response();
-    res.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&format!(
+    let cookie = if plain {
+        format!("thoddrop-lan={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=34560000")
+    } else {
+        format!(
             "__Host-thoddrop={token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=34560000"
-        ))
-        .unwrap(),
-    );
+        )
+    };
+    res.headers_mut()
+        .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
     Ok(res)
 }
 
@@ -614,7 +833,7 @@ async fn pending(State(app): State<App>, Principal(id): Principal) -> Api<Json<V
     let mut items: Vec<_> = db
         .items
         .values()
-        .filter(|item| item.recipient == id && !item.delivered)
+        .filter(|item| (item.recipient == id || item.relay_to == Some(id)) && !item.delivered)
         .collect();
     items.sort_unstable_by_key(|item| (item.time, item.id));
     items.truncate(30);
@@ -637,20 +856,23 @@ async fn delivered(
     {
         return Err(denied());
     }
-    if !receipts.iter().any(|id_to_mark| {
-        db.items
-            .get(id_to_mark)
-            .is_some_and(|item| item.recipient == id && !item.delivered)
-    }) {
-        return Ok(StatusCode::NO_CONTENT);
-    }
-    let mut items = db.items.clone();
-    for receipt in receipts {
-        if let Some(item) = items.get_mut(&receipt).filter(|item| item.recipient == id) {
-            item.delivered = true;
+    let receipts: HashSet<_> = receipts.into_iter().collect();
+    purge_items(&app, &mut db, |item| {
+        item.relay_to == Some(id) && receipts.contains(&item.id)
+    })?;
+    if db
+        .items
+        .values()
+        .any(|item| item.recipient == id && !item.delivered && receipts.contains(&item.id))
+    {
+        let mut items = db.items.clone();
+        for receipt in receipts {
+            if let Some(item) = items.get_mut(&receipt).filter(|item| item.recipient == id) {
+                item.delivered = true;
+            }
         }
+        app.save_items(&mut db, items, false)?;
     }
-    app.save_items(&mut db, items, false)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -710,7 +932,9 @@ fn lookup(app: &App, owner: Uuid, id: Uuid) -> Api<(Item, bool)> {
     let item = db
         .items
         .get(&id)
-        .filter(|item| item.recipient == owner && item.text.is_none())
+        .filter(|item| {
+            (item.recipient == owner || item.relay_to == Some(owner)) && item.text.is_none()
+        })
         .cloned()
         .ok_or_else(missing)?;
     Ok((item, owner == db.config.host))
@@ -875,7 +1099,7 @@ fn targets(db: &Database, from: Uuid, to: &[Uuid]) -> Result<()> {
         if *id == from || !seen.insert(*id) {
             bail!("Проверьте список получателей.")
         }
-        if *id != db.config.host && !db.devices.contains_key(id) {
+        if *id != db.config.host && !db.devices.contains_key(id) && relay_owner(db, *id).is_none() {
             bail!("Одно из устройств больше не подключено.")
         }
     }
@@ -904,9 +1128,13 @@ fn store(
     } else {
         db.devices
             .get(&from)
+            .map(|device| device.name.clone())
+            .or_else(|| {
+                relay_owner(&db, from)
+                    .and_then(|owner| db.shared[&owner].iter().find(|device| device.id == from))
+                    .map(|device| device.name.clone())
+            })
             .context("Доступ отозван.")?
-            .name
-            .clone()
     };
     let size = file.as_ref().map_or_else(
         || text.as_ref().map_or(0, |text| text.len() as u64),
@@ -937,6 +1165,7 @@ fn store(
                 inbox_folder: None,
                 stored_name: None,
                 delivered: false,
+                relay_to: relay_owner(&db, recipient),
             };
             if recipient == db.config.host {
                 let source = file
@@ -973,29 +1202,223 @@ fn store(
     Ok(to.len())
 }
 
+struct TransferRoute {
+    from: Uuid,
+    local: Vec<Uuid>,
+    upstream: Option<(Upstream, Vec<Uuid>, Option<Uuid>)>,
+    hops: u8,
+}
+
+fn transfer_route(
+    app: &App,
+    principal: Uuid,
+    headers: &HeaderMap,
+    recipients: Vec<Uuid>,
+) -> Api<TransferRoute> {
+    let db = app.db.lock().unwrap();
+    let hops = match headers.get("x-thoddrop-hops") {
+        Some(value) if is_pc(&db, principal) => value
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|hops| *hops <= 8)
+            .context("Слишком много промежуточных компьютеров.")?,
+        Some(_) => return Err(denied()),
+        None => 0,
+    };
+    let claimed = headers.get("x-thoddrop-sender");
+    let from = if let Some(claimed) = claimed {
+        let id = claimed
+            .to_str()
+            .ok()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or_else(denied)?;
+        if !is_pc(&db, principal) || relay_owner(&db, id) != Some(principal) {
+            return Err(denied());
+        }
+        id
+    } else {
+        principal
+    };
+    if recipients.is_empty() || recipients.len() > 64 {
+        return Err(anyhow::anyhow!("Выберите получателей.").into());
+    }
+    let mut unique = HashSet::new();
+    let mut local = Vec::new();
+    let mut remote = Vec::new();
+    for id in recipients {
+        if id == from || !unique.insert(id) {
+            return Err(anyhow::anyhow!("Проверьте список получателей.").into());
+        }
+        if id == db.config.host || db.devices.contains_key(&id) || relay_owner(&db, id).is_some() {
+            local.push(id);
+        } else {
+            if db
+                .config
+                .upstream
+                .as_ref()
+                .is_some_and(|peer| peer.device == id)
+            {
+                return Err(anyhow::anyhow!("Нельзя отправить передачу этому компьютеру.").into());
+            }
+            if db
+                .peer_roster
+                .as_ref()
+                .and_then(|roster| roster["devices"].as_array())
+                .is_some_and(|devices| devices.iter().any(|device| device["id"] == json!(id)))
+            {
+                remote.push(id);
+            } else {
+                return Err(anyhow::anyhow!("Одно из устройств больше не подключено.").into());
+            }
+        }
+    }
+    let upstream = if remote.is_empty() {
+        None
+    } else {
+        let peer = db
+            .config
+            .upstream
+            .clone()
+            .context("Ведущий компьютер недоступен.")?;
+        let sender = (from != db.config.host).then_some(from);
+        if sender.is_some() && !db.peer_sharing {
+            if db.peer_error.is_some() {
+                return Err(anyhow::anyhow!("Ведущий компьютер недоступен.").into());
+            }
+            return Err(anyhow::anyhow!(
+                "Обновите ThodDrop на ведущем ПК для передачи между подключёнными устройствами."
+            )
+            .into());
+        }
+        Some((peer, remote, sender))
+    };
+    Ok(TransferRoute {
+        from,
+        local,
+        upstream,
+        hops,
+    })
+}
+
+async fn forward(
+    app: &App,
+    peer: &Upstream,
+    sender: Option<Uuid>,
+    hops: u8,
+    path: &str,
+) -> Result<reqwest::RequestBuilder> {
+    let client = net::peer_client(&peer.url, &peer.ca)?;
+    if sender.is_some() {
+        // A newly paired phone can send before the next periodic directory sync.
+        let _guard = app.share_gate.lock().await;
+        let devices = published_devices(&app.db.lock().unwrap());
+        let response = net::peer_request(&client, peer, reqwest::Method::POST, "/api/share")
+            .timeout(Duration::from_secs(5))
+            .json(&devices)
+            .send()
+            .await
+            .context("Не удалось синхронизировать устройства с ведущим ПК.")?;
+        crate::desktop::result(response).await?;
+    }
+    let request = net::peer_request(&client, peer, reqwest::Method::POST, path)
+        .header("x-thoddrop-hops", u16::from(hops) + 1);
+    Ok(match sender {
+        Some(id) => request.header("x-thoddrop-sender", id.to_string()),
+        None => request,
+    })
+}
+
+async fn forward_result(request: reqwest::RequestBuilder) -> Api<usize> {
+    let response = request
+        .send()
+        .await
+        .context("Ведущий компьютер недоступен.")?;
+    let reply = crate::desktop::result(response).await?;
+    Ok(reply["count"].as_u64().unwrap_or_default() as usize)
+}
+
 async fn send_text(
     State(app): State<App>,
-    Principal(from): Principal,
+    Principal(principal): Principal,
+    headers: HeaderMap,
     Json(form): Json<TextSend>,
 ) -> Api<Json<Value>> {
     if form.text.trim().is_empty() || form.text.len() > 48 * 1024 {
         return Err(anyhow::anyhow!("Введите текст объёмом до 48 КБ.").into());
     }
-    let count = store(
-        &app,
-        from,
-        &form.to,
-        form.batch,
-        "Текст".into(),
-        Some(form.text),
-        None,
-    )?;
+    let route = transfer_route(&app, principal, &headers, form.to)?;
+    let mut count = 0;
+    if let Some((peer, remote, sender)) = route.upstream {
+        count += forward_result(
+            forward(&app, &peer, sender, route.hops, "/api/text")
+                .await?
+                .json(&json!({"to":remote,"text":form.text,"batch":form.batch})),
+        )
+        .await?;
+    }
+    if !route.local.is_empty() {
+        count += store(
+            &app,
+            route.from,
+            &route.local,
+            form.batch,
+            "Текст".into(),
+            Some(form.text),
+            None,
+        )
+        .with_context(|| {
+            if count > 0 {
+                "Часть получателей уже приняла текст."
+            } else {
+                "Не удалось отправить текст."
+            }
+        })?;
+    }
     Ok(Json(json!({"count":count})))
+}
+
+pub fn accept_relay(app: &App, mut item: Item, source: Option<&Path>) -> Result<()> {
+    let mut db = app.db.lock().unwrap();
+    item.relay_to = relay_owner(&db, item.recipient);
+    item.delivered = false;
+    item.inbox_folder = None;
+    item.stored_name = None;
+    if db.items.contains_key(&item.id)
+        || (item.relay_to.is_none() && !db.devices.contains_key(&item.recipient))
+    {
+        return Ok(());
+    }
+    let used = db.items.values().map(|entry| entry.size).sum::<u64>();
+    if db.items.len() >= MAX_ITEMS || used.saturating_add(item.size) > MAX_STORAGE {
+        bail!("Хранилище получателя заполнено.");
+    }
+    let path = app.path(&item, false);
+    if let Some(source) = source {
+        let parent = path.parent().context("Несуществующая папка.")?;
+        std::fs::create_dir_all(parent)?;
+        match std::fs::hard_link(source, &path) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::AlreadyExists
+                    && path.metadata().is_ok_and(|file| file.len() == item.size) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut items = db.items.clone();
+    items.insert(item.id, item);
+    if let Err(error) = app.save_items(&mut db, items, false) {
+        if source.is_some() {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 async fn upload(
     State(app): State<App>,
-    Principal(from): Principal,
+    Principal(principal): Principal,
     Query(form): Query<FileSend>,
     request: Request,
 ) -> Api<Json<Value>> {
@@ -1011,11 +1434,9 @@ async fn upload(
         .map(Uuid::parse_str)
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|_| anyhow::anyhow!("Проверьте список получателей."))?;
-    let host_needs_copy = {
-        let db = app.db.lock().unwrap();
-        targets(&db, from, &to)?;
-        to.len() > 1 && to.contains(&db.config.host)
-    };
+    let route = transfer_route(&app, principal, request.headers(), to)?;
+    let host_needs_copy =
+        route.local.len() > 1 && route.local.contains(&app.db.lock().unwrap().config.host);
     let temp = tempfile::Builder::new()
         .prefix(".upload-")
         .tempfile_in(app.root.join("runtime"))?
@@ -1053,19 +1474,49 @@ async fn upload(
     } else {
         None
     };
-    let count = store(
-        &app,
-        from,
-        &to,
-        form.batch,
-        model::file_name(&form.name),
-        None,
-        Some(StagedFile {
-            relay: &temp,
-            inbox: inbox.as_deref(),
-            size,
-        }),
-    )?;
+    let mut count = 0;
+    if let Some((peer, remote, sender)) = route.upstream {
+        let file = tokio::fs::File::open(&temp).await?;
+        let recipients = remote
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        count += forward_result(
+            forward(&app, &peer, sender, route.hops, "/api/upload")
+                .await?
+                .query(&[
+                    ("to", recipients),
+                    ("name", form.name.clone()),
+                    ("batch", form.batch.to_string()),
+                ])
+                .header(header::CONTENT_LENGTH, size)
+                .body(reqwest::Body::wrap_stream(ReaderStream::new(file))),
+        )
+        .await?;
+    }
+    if !route.local.is_empty() {
+        count += store(
+            &app,
+            route.from,
+            &route.local,
+            form.batch,
+            model::file_name(&form.name),
+            None,
+            Some(StagedFile {
+                relay: &temp,
+                inbox: inbox.as_deref(),
+                size,
+            }),
+        )
+        .with_context(|| {
+            if count > 0 {
+                "Часть получателей уже приняла файл."
+            } else {
+                "Не удалось отправить файл."
+            }
+        })?;
+    }
     Ok(Json(json!({"count":count})))
 }
 

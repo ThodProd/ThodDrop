@@ -236,11 +236,18 @@ $('peer-address').onclick = async () => {
     notice('Адрес обновлён.');
   } catch (error) { failure(error); }
 };
-$('leave').onclick = async () => {
-  const answer = await ask({title:'Отключиться от ведущего ПК?', body:'Этот компьютер снова запустит свою сеть. Полученные файлы останутся в папке приёма.', action:'Отключиться'});
+async function forgetPc() {
+  const answer = await ask({title:'Забыть ведущий ПК?', body:'Полученные файлы сохранятся. Для нового подключения понадобится приглашение.', action:'Забыть', danger:true});
   if (!answer) return;
-  try { await call('leave'); dirty = false; await pause(650); await refresh(true); } catch (error) { failure(error); }
-};
+  try {
+    const result = await call('leave');
+    dirty = false;
+    await pause(650);
+    await refresh(true);
+    notice(result.notified ? 'Компьютер забыт.' : 'Компьютер забыт на этом ПК. Ведущий был недоступен для уведомления.');
+  } catch (error) { failure(error); }
+}
+$('leave').onclick = forgetPc;
 async function editDevice(device, revoke) {
   const answer = await ask(revoke ? {title:'Удалить устройство?', body:'«' + device.name + '» потеряет доступ. Его входящие на сервере будут удалены.', action:'Удалить', danger:true}
     : {title:'Переименовать устройство', field:'Имя', value:device.name});
@@ -259,9 +266,11 @@ function renderRoster() {
     row.append(deviceButton(device, renderRoster), el('span', 'state' + (device.online ? ' online' : ''), device.online ? 'В сети' : 'Не в сети'));
     if (device.managed) {
       row.append(button('Переименовать', () => editDevice(device, false), 'edit', true));
-      const revoke = button('Удалить устройство', () => editDevice(device, true), 'remove', true);
+      const revoke = button(device.kind === 'pc' ? 'Забыть компьютер' : 'Удалить устройство', () => editDevice(device, true), 'remove', true);
       revoke.classList.add('remove');
       row.append(revoke);
+    } else if (device.id === view.peerId) {
+      row.append(button('Забыть компьютер', forgetPc, 'remove', true));
     }
     list.append(row);
   }
@@ -297,18 +306,21 @@ function renderConnection() {
     detail.append(el('strong', '', candidate.name), el('small', '', candidate.url));
     const connected = candidate.url === view.joined;
     row.append(detail, connected
-      ? el('span', 'state' + (view.peerError ? '' : ' online'), view.peerError ? 'Нет связи' : 'Подключён')
+      ? button('Забыть компьютер', forgetPc)
       : button('Подключиться', () => join(candidate)));
     found.append(row);
   }
   $('peer-address').hidden = !view.joined;
   $('leave').hidden = !view.joined;
+  $('phone-http-url').hidden = !view.phoneHttpUrl;
+  $('phone-http-url').textContent = view.phoneHttpUrl || '';
   if (!dirty) {
     $('pc-name').value = view.name;
     $('address').value = view.address || '';
     $('port').value = view.port;
     $('discovery').checked = view.discovery;
     $('autostart').checked = view.autostart;
+    $('phone-http').checked = view.phoneHttp;
   }
 }
 $('config').addEventListener('input', () => { dirty = true; });
@@ -327,7 +339,7 @@ async function saveSettings() {
   status.textContent = 'Сохранение…';
   try {
     const result = await call('config', {name:$('pc-name').value, address:$('address').value.trim() || null,
-      port:$('port').valueAsNumber, discovery:$('discovery').checked, autostart:$('autostart').checked});
+      port:$('port').valueAsNumber, discovery:$('discovery').checked, autostart:$('autostart').checked, phone_http:$('phone-http').checked});
     dirty = false;
     status.textContent = result.nameSyncPending
       ? 'Настройки сохранены. Имя на ведущем ПК обновится при синхронизации.'
@@ -435,14 +447,10 @@ $('send-button').onclick = async () => {
   const hasText = !!text.trim();
   const to = [...selected];
   const total = files.length + Number(hasText);
-  const progress = $('progress');
   const status = $('send-status');
   sending = true;
   $('send').classList.add('sending');
   $('files').disabled = $('message').disabled = true;
-  progress.hidden = false;
-  progress.max = total;
-  progress.value = 0;
   status.hidden = false;
   status.textContent = files.length ? 'Подготовка вложений…' : 'Отправка…';
   renderRoster();
@@ -451,16 +459,21 @@ $('send-button').onclick = async () => {
     for (const [index, file] of files.entries()) {
       const id = crypto.randomUUID();
       attachments.push(id);
-      await stageFile(file, id, fraction => { progress.value = index + fraction; });
+      attachmentProgress(index, 0);
+      await stageFile(file, id, fraction => attachmentProgress(index, fraction * 30));
     }
-    progress.value = 0;
     status.textContent = 'Отправка…';
     const job = await call('send', {to, attachments, text});
     let done = 0;
     for (;;) {
       const state = await call('job', {id:job.id});
-      progress.value = state.done;
       done = state.done;
+      const sentFiles = Math.max(0, done - Number(hasText));
+      for (let index = 0; index < sentFiles; index++) attachmentProgress(index, 100);
+      if (done >= Number(hasText) && sentFiles < files.length) {
+        const fraction = state.file_size ? state.file_progress / state.file_size : 0;
+        attachmentProgress(sentFiles, Math.min(99, 30 + fraction * 69));
+      }
       if (state.finished) {
         if (hasText && done) $('message').value = '';
         files = files.slice(Math.max(0, done - Number(hasText)));
@@ -478,7 +491,7 @@ $('send-button').onclick = async () => {
     sending = false;
     $('send').classList.remove('sending');
     $('files').disabled = $('message').disabled = false;
-    progress.hidden = true;
+    updateFiles();
     status.hidden = true;
     renderRoster();
   }
@@ -519,7 +532,7 @@ function renderInbox() {
   previews.disconnect();
   renderBatches(list, entries, item => {
     const actions = [button('Скопировать', () => itemAction(item, 'copy'), 'copy', true)];
-    if (item.text == null || item.stored_name) actions.push(button('Показать в папке', () => itemAction(item, 'reveal'), 'folder', true));
+    if (item.text == null) actions.push(button('Показать в папке', () => itemAction(item, 'reveal'), 'folder', true));
     const trash = button('Удалить передачу', () => itemAction(item, 'delete'), 'remove', true);
     trash.classList.add('remove');
     actions.push(trash);

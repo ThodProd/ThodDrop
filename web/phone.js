@@ -14,6 +14,7 @@ function invitationCode(url) {
     || url.searchParams.get('pair') || new URLSearchParams(url.hash.slice(1)).get('pair');
 }
 let pairCode = invitationCode(new URL(location.href));
+if (location.protocol === 'http:') $('certificate-link').hidden = true;
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 async function api(path, options = {}) {
@@ -88,6 +89,30 @@ $('files').addEventListener('change', event => {
   attachments();
 });
 
+function batchId() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return [hex.slice(0,8), hex.slice(8,12), hex.slice(12,16), hex.slice(16,20), hex.slice(20)].join('-');
+}
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const field = el('textarea', 'sr');
+  field.value = text;
+  field.readOnly = true;
+  document.body.append(field);
+  try {
+    field.focus();
+    field.select();
+    field.setSelectionRange(0, text.length);
+    if (!document.execCommand('copy')) throw new Error('Выделите текст, чтобы скопировать его.');
+  } finally { field.remove(); }
+}
 function sendFile(file, to, batch, progress) {
   return new Promise((resolve, reject) => {
     const query = new URLSearchParams({name:file.name, to:to.join(','), batch});
@@ -115,28 +140,25 @@ $('send').addEventListener('submit', async event => {
   const total = files.length + Number(hasText);
   if (!total) { notice('Добавьте файлы или текст.', true); return; }
   if (files.some(file => file.size > 2 * 1024 ** 3)) { notice('Один файл может занимать до 2 ГБ.', true); return; }
-  const batch = crypto.randomUUID();
+  const batch = batchId();
   const to = [...selected];
-  const progress = $('progress');
   busy = true;
   $('send').classList.add('sending');
   $('files').disabled = $('message').disabled = true;
-  progress.max = total;
-  progress.value = 0;
-  progress.hidden = false;
   targets();
   let done = 0;
   try {
     if (hasText) {
       await post('/api/text', {text, to, batch});
       $('message').value = '';
-      progress.value = ++done;
+      done++;
     }
     while (files.length) {
-      await sendFile(files[0], to, batch, fraction => { progress.value = done + fraction; });
+      attachmentProgress(0, 0);
+      await sendFile(files[0], to, batch, fraction => attachmentProgress(0, Math.min(99, fraction * 100)));
       files.shift();
       attachments();
-      progress.value = ++done;
+      done++;
     }
     notice('Отправлено ' + done + '.');
   } catch (error) {
@@ -145,7 +167,7 @@ $('send').addEventListener('submit', async event => {
     busy = false;
     $('send').classList.remove('sending');
     $('files').disabled = $('message').disabled = false;
-    progress.hidden = true;
+    attachments();
     targets();
   }
 });
@@ -190,7 +212,7 @@ function renderInbox() {
     const actions = [];
     let picture;
     if (item.text != null) actions.push(button('Скопировать текст', async () => {
-      try { await navigator.clipboard.writeText(item.text); notice('Скопировано.'); } catch (error) { failure(error); }
+      try { await copyText(item.text); notice('Скопировано.'); } catch (error) { failure(error); }
     }, 'copy', true));
     else {
       if (imageFile(item.name)) {

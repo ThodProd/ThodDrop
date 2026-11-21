@@ -57,7 +57,7 @@ fieldset .muted{margin:0}
 .device .recipient{justify-content:start}
 .device .recipient:disabled{opacity:.8}
 .devices{margin:0 0 12px}
-.certificate-footer{margin-top:24px}
+.certificate-footer{display:flex;gap:8px;flex-wrap:wrap;margin-top:24px}
 .fingerprint code{overflow-wrap:anywhere;font-size:12px}
 #certificate-setup{margin-bottom:12px}
 summary{cursor:pointer}
@@ -71,7 +71,12 @@ details p{margin-top:9px}
 .code-timer{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
 .code-timer progress{width:44px;height:5px}
 .attachments{display:grid;gap:6px;margin:0;padding:0;list-style:none;max-height:240px;overflow:auto}
-.attachments li{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:8px;overflow-wrap:anywhere}
+.attachments li{position:relative;display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:8px;overflow-wrap:anywhere;overflow:hidden}
+.attachments li button{grid-column:4}
+.attachment-percent{grid-column:3;color:var(--accent);font-variant-numeric:tabular-nums;font-weight:600}
+.attachments .attachment-progress{position:absolute;inset:auto 0 0;width:100%;height:3px;appearance:none;border:0;background:var(--line)}
+.attachment-progress::-webkit-progress-bar{background:var(--line)}
+.attachment-progress::-webkit-progress-value{background:var(--accent)}
 .attachment-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:8px;background:var(--selected);color:var(--accent)}
 .attachment-icon svg,.drop-zone>svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .attachment-info strong,.attachment-info small{display:block}
@@ -88,22 +93,21 @@ details p{margin-top:9px}
 #settings-status{margin:0}
 #settings-status.error{color:var(--red)}
 .pairing-actions{margin-bottom:12px}
-.item{padding:10px 0;min-width:0}
-.item-head{display:flex;align-items:start;justify-content:space-between;gap:8px}
+.item{padding:7px 0;min-width:0}
+.file-item{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:8px}
+.text-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:6px}
 .item-title{min-width:0;overflow-wrap:anywhere}
 .item-title small{display:block;margin-top:3px}
 .item-actions{display:flex;align-items:center;justify-content:end;gap:2px;flex-wrap:wrap}
-.message{margin-top:6px;background:var(--surface);border-radius:8px;padding:8px 10px;overflow-wrap:anywhere}
-.message-text{white-space:pre-wrap;max-height:240px;overflow:auto;padding-top:8px}
-.thumb{display:block;max-width:100%;max-height:155px;object-fit:contain;border-radius:6px}
+.message-text{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto}
+.thumb{display:block;width:100%;height:100%;object-fit:cover;border-radius:6px}
 .thumb-loading{position:absolute;width:1px;height:1px;opacity:0}
-.image-trigger{position:relative;max-width:100%;margin-top:8px;padding:3px;overflow:hidden}
-.transfer{padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
-.transfer-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;overflow-wrap:anywhere}
+.image-trigger{position:relative;width:38px;height:38px;padding:2px;overflow:hidden;font-size:0;gap:0}
+.transfer{padding:9px 12px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.transfer-head{display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;overflow-wrap:anywhere;padding-bottom:6px}
 .transfer-head a{margin-left:auto}
 .transfer-content{display:grid;gap:0 16px}
 .transfer-content .item+.item{border-top:1px solid var(--line)}
-.transfer-content .message{background:var(--bg)}
 .inbox{display:grid;gap:10px}
 .desktop main{width:100%;max-width:1440px}
 .desktop #transfers:not([hidden]){display:grid;grid-template-columns:minmax(260px,1fr) minmax(360px,2fr);align-items:start;gap:18px 26px}
@@ -111,8 +115,6 @@ details p{margin-top:9px}
 .desktop #transfers #send,.desktop .incoming{padding:16px;border:1px solid var(--line);border-radius:12px}
 .desktop #transfers #send textarea{min-height:112px}
 .desktop .incoming{margin:0;min-height:min(48vh,480px)}
-.desktop .transfer-content{grid-template-columns:repeat(auto-fit,minmax(min(100%,165px),1fr))}
-.desktop .transfer-content .item+.item{border-top:0}
 #image-viewer{position:fixed;inset:0;width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;padding:14px;background:#111;color:#fff;border:0;border-radius:0}
 #image-viewer[open]{display:grid;grid-template: auto minmax(0,1fr) / 1fr;justify-items:center;gap:12px}
 #image-viewer button{justify-self:end;background:#222;color:#fff;border-color:#555}
@@ -132,6 +134,10 @@ dialog p{overflow-wrap:anywhere}
 .phone .icon-button{width:40px}
 .phone .actions button.primary{margin-left:auto}
 .phone .inbox .transfer{margin:0;padding:10px 12px}
+.phone .image-trigger{min-height:38px}
+.phone .item-actions .icon-button,.phone .file-item .link-button{width:34px;min-height:34px}
+.phone .file-item .link-button{font-size:0;gap:0;padding:4px}
+.phone .transfer-head .link-button{min-height:30px}
 @media(max-width:760px){.desktop #transfers:not([hidden]){grid-template-columns:minmax(0,1fr)}}
 @media(max-width:590px){.desktop main{padding:20px 16px 32px}.desktop .top{flex-wrap:wrap;padding:8px 14px;gap:6px}.desktop .top nav{order:3;width:100%;gap:4px}.desktop nav button{padding-inline:8px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}

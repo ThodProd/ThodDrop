@@ -20,6 +20,10 @@ pub struct Config {
     pub upstream: Option<Upstream>,
     #[serde(default)]
     pub rename_pending: bool,
+    #[serde(default)]
+    pub phone_http: bool,
+    #[serde(default)]
+    pub phone_port: Option<u16>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -32,6 +36,8 @@ impl Default for Config {
             autostart: true,
             upstream: None,
             rename_pending: false,
+            phone_http: false,
+            phone_port: None,
         }
     }
 }
@@ -59,6 +65,16 @@ pub struct Device {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub token_hash: Option<String>,
+    #[serde(default)]
+    pub web_http: bool,
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PublicDevice {
+    pub id: Uuid,
+    pub name: String,
+    pub kind: String,
+    pub online: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -79,6 +95,8 @@ pub struct Item {
     pub stored_name: Option<String>,
     #[serde(default)]
     pub delivered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_to: Option<Uuid>,
 }
 
 pub type Items = BTreeMap<Uuid, Item>;

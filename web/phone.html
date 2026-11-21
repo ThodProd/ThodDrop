@@ -7,12 +7,12 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="ThodDrop">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="icon" href="/icon-192.png">
   <link rel="stylesheet" href="/style.css">
   <title>ThodDrop</title>
   <script defer src="/common.js"></script>
-  <script defer src="/phone.js?v=2.0.4"></script>
+  <script defer src="/phone.js?v=2.0.5"></script>
 </head>
 <body class="phone">
   <header class="top"><span class="brand"><img src="/icon-192.png" alt="">ThodDrop</span><span id="connection" class="tag" aria-live="polite">Подключение…</span></header>
@@ -39,7 +39,6 @@
             <label class="file-button"><span data-icon="attach"></span>Файлы и фото<input id="files" type="file" multiple></label>
             <button class="primary" id="send-button"><span data-icon="send"></span>Отправить</button>
           </div>
-          <progress id="progress" max="1" hidden></progress>
         </form>
       </section>
       <section>
@@ -49,7 +48,8 @@
       </section>
     </div>
     <footer class="certificate-footer">
-      <a class="link-button" href="/certificate">Установить сертификат</a>
+      <a class="link-button" id="certificate-link" href="/certificate">Установить сертификат</a>
+      <a class="link-button" href="/ThodDrop-WebClip.mobileconfig">Скачать значок для iPhone</a>
     </footer>
   </main>
   <dialog id="confirm">

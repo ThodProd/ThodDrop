@@ -91,9 +91,24 @@ function showAttachments(files, remove) {
     const information = el('div', 'attachment-info');
     information.append(el('strong', '', file.name));
     if (typeof file.size === 'number') information.append(el('small', '', size(file.size)));
-    row.append(mark, information, button('Убрать файл', () => remove(index), 'remove', true));
+    const percent = el('small', 'attachment-percent');
+    percent.hidden = true;
+    const bar = el('progress', 'attachment-progress');
+    bar.max = 100;
+    bar.hidden = true;
+    bar.setAttribute('aria-label', 'Отправка файла ' + file.name);
+    row.append(mark, information, percent, button('Убрать файл', () => remove(index), 'remove', true), bar);
     list.append(row);
   });
+}
+function attachmentProgress(index, percent) {
+  const row = $('attachments').children[index];
+  if (!row) return;
+  const progress = row.querySelector('progress');
+  const label = row.querySelector('.attachment-percent');
+  progress.value = percent;
+  label.textContent = Math.floor(percent) + '%';
+  progress.hidden = label.hidden = false;
 }
 function download(label, href, graphic = 'down') {
   const link = el('a', 'link-button', label);
@@ -103,26 +118,24 @@ function download(label, href, graphic = 'down') {
   return link;
 }
 function itemRow(item, actions, picture) {
-  const row = el('article', 'item');
-  const title = el('div', 'item-title');
-  title.append(el('strong', '', item.name));
-  if (item.text == null) title.append(el('small', '', size(item.size)));
+  const row = el('article', item.text == null ? 'item file-item' : 'item text-item');
   const toolbar = el('div', 'item-actions');
   toolbar.append(...actions);
-  const head = el('div', 'item-head');
-  head.append(title, toolbar);
-  row.append(head);
   if (item.text != null) {
-    const details = el('details', 'message');
-    const sample = item.text.replace(/\s+/g, ' ').trim();
-    details.append(el('summary', '', sample.length > 90 ? sample.slice(0, 90) + '…' : sample), el('div', 'message-text', item.text));
-    row.append(details);
-  } else if (picture) row.append(picture);
+    row.append(el('div', 'message-text', item.text), toolbar);
+    return row;
+  }
+  const title = el('div', 'item-title');
+  title.append(el('strong', '', item.name), el('small', '', size(item.size)));
+  if (!picture) {
+    picture = el('span', 'attachment-icon');
+    picture.append(icon('file'));
+  }
+  row.append(picture, title, toolbar);
   return row;
 }
 
 function renderBatches(parent, items, renderItem, batchAction) {
-  const open = new Set([...parent.querySelectorAll('article:has(details[open])')].map(node => node.dataset.id));
   const batches = new Map();
   for (const item of items) {
     if (!batches.has(item.batch)) batches.set(item.batch, []);
@@ -141,7 +154,6 @@ function renderBatches(parent, items, renderItem, batchAction) {
     for (const item of [...batch].reverse()) {
       const node = renderItem(item);
       node.dataset.id = item.id;
-      if (open.has(item.id) && item.text != null) node.querySelector('details').open = true;
       content.append(node);
     }
     card.append(content);

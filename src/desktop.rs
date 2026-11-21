@@ -48,43 +48,37 @@ pub fn routes() -> Router<App> {
 }
 
 async fn status(State(app): State<App>) -> Json<Value> {
-    let (mut data, host, peer_roster, peer_online, discovery) = {
+    let (mut data, host, managed, discovery) = {
         let db = app.db.lock().unwrap();
+        let peer = db
+            .peer_roster
+            .as_ref()
+            .and_then(|roster| roster["devices"].as_array())
+            .and_then(|devices| devices.last());
         (
             json!({"name":db.config.name,"address":db.config.address,"port":db.config.port,
             "discovery":db.config.discovery,"autostart":db.config.autostart,"url":net::url(&db.config),
             "networkError":db.network_error,"peerError":db.peer_error,
+            "peerName":peer.and_then(|device| device["name"].as_str()),
+            "peerId":peer.and_then(|device| device["id"].as_str()),
             "pcCodeActive":db.pc_code.as_ref().is_some_and(|code| code.remaining() > 0),
-            "nameSyncPending":db.config.rename_pending,
+            "nameSyncPending":db.config.rename_pending,"phoneHttp":db.config.phone_http,
             "joined":db.config.upstream.as_ref().map(|upstream| &upstream.url)}),
             db.config.host,
-            db.peer_roster.clone(),
-            db.peer_error.is_none(),
+            db.devices
+                .keys()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
             db.config.discovery,
         )
     };
     let mut roster = app.roster(host);
     if let Some(devices) = roster["devices"].as_array_mut() {
-        for device in devices.iter_mut() {
-            device["managed"] = json!(true);
-        }
-        if let Some(peer) = peer_roster
-            && let Some(remote) = peer["devices"].as_array()
-        {
-            if let Some(peer_host) = remote.last() {
-                data["peerName"] = peer_host["name"].clone();
-            }
-            for device in remote {
-                if device["id"] != peer["self"]
-                    && !devices.iter().any(|local| local["id"] == device["id"])
-                {
-                    let mut device = device.clone();
-                    if !peer_online {
-                        device["online"] = json!(false);
-                    }
-                    devices.push(device);
-                }
-            }
+        for device in devices {
+            let id = device["id"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok());
+            device["managed"] = json!(id.is_some_and(|id| managed.contains(&id)));
         }
     }
     data["roster"] = roster;
@@ -103,6 +97,7 @@ async fn status(State(app): State<App>) -> Json<Value> {
         data["candidates"] = json!(candidates);
     }
     data["certificateUrl"] = json!(*app.certificate_url.lock().unwrap());
+    data["phoneHttpUrl"] = json!(*app.phone_http_url.lock().unwrap());
     Json(data)
 }
 
@@ -121,6 +116,7 @@ struct Settings {
     port: u16,
     discovery: bool,
     autostart: bool,
+    phone_http: Option<bool>,
 }
 async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Api<Json<Value>> {
     let new_name = model::name(&settings.name)?;
@@ -143,10 +139,14 @@ async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Ap
     }
     config.discovery = settings.discovery;
     config.autostart = settings.autostart;
+    if let Some(phone_http) = settings.phone_http {
+        config.phone_http = phone_http;
+    }
     let restart = config.name != db.config.name
         || config.port != db.config.port
         || config.address != db.config.address
-        || config.discovery != db.config.discovery;
+        || config.discovery != db.config.discovery
+        || config.phone_http != db.config.phone_http;
     if config.autostart != db.config.autostart {
         win::autostart(&app.root, config.autostart)?;
     }
@@ -217,7 +217,17 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
     let code = model::secret();
     let minutes = 5;
     let expires = Instant::now() + Duration::from_secs(minutes * 60);
-    let link = format!("{url}/join/{code}");
+    let plain = kind.kind == "phone" && db.config.phone_http;
+    let phone_url = if plain {
+        app.phone_http_url
+            .lock()
+            .unwrap()
+            .clone()
+            .context("Локальный адрес телефона пока недоступен.")?
+    } else {
+        url.clone()
+    };
+    let link = format!("{phone_url}/join/{code}");
     let data = match kind.kind.as_str() {
         "pc" => {
             let invite = Invite {
@@ -233,8 +243,12 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
         "phone" => json!({"link":link,"qr":qr_image(&link)?,"minutes":minutes}),
         _ => return Err(anyhow::anyhow!("Выберите тип устройства.").into()),
     };
-    db.invites
-        .insert(kind.kind, (model::digest(&code), expires));
+    let key = if plain {
+        "phone-http".into()
+    } else {
+        kind.kind
+    };
+    db.invites.insert(key, (model::digest(&code), expires));
     Ok(Json(data))
 }
 
@@ -358,13 +372,26 @@ async fn join(State(app): State<App>, Json(request): Json<Join>) -> Api<Json<Val
 }
 
 async fn leave(State(app): State<App>) -> Api<Json<Value>> {
-    let mut db = app.db.lock().unwrap();
-    let mut config = db.config.clone();
-    config.upstream = None;
-    config.rename_pending = false;
-    app.save_config(&mut db, config)?;
+    let upstream = {
+        let mut db = app.db.lock().unwrap();
+        let mut config = db.config.clone();
+        let upstream = config.upstream.take();
+        config.rename_pending = false;
+        app.save_config(&mut db, config)?;
+        db.peer_roster = None;
+        db.peer_error = None;
+        db.peer_sharing = false;
+        let _ = std::fs::remove_file(app.root.join("peer-roster-v3.json"));
+        upstream
+    };
+    let notified = match upstream {
+        Some(peer) => contact(&peer, reqwest::Method::POST, "/api/unpair", None)
+            .await
+            .is_ok(),
+        None => true,
+    };
     restart_later(app.clone());
-    Ok(Json(json!({"restart":true})))
+    Ok(Json(json!({"restart":true,"notified":notified})))
 }
 
 #[derive(Deserialize)]
@@ -434,23 +461,7 @@ async fn device(
             .context("Устройство уже удалено.")?
             .name = model::name(&name)?;
     } else {
-        devices.remove(&id);
-        db.presence.remove(&id);
-        // Remove the revoked device's relay entries and release their storage.
-        let mut items = db.items.clone();
-        let removed = items
-            .extract_if(.., |_, item| item.recipient == id)
-            .map(|(_, item)| item)
-            .collect::<Vec<_>>();
-        app.save_devices(&mut db, devices)?;
-        app.save_items(&mut db, items, false)?;
-        for item in removed {
-            if item.text.is_none() {
-                let path = app.path(&item, false);
-                let _ = std::fs::remove_file(&path);
-                let _ = std::fs::remove_dir(path.parent().unwrap());
-            }
-        }
+        server::forget_device(&app, &mut db, id)?;
         return Ok(Json(json!(true)));
     }
     app.save_devices(&mut db, devices)?;
@@ -762,68 +773,36 @@ async fn send_job(
     text: String,
     files: impl Iterator<Item = SendFile>,
 ) -> Result<()> {
-    use reqwest::Method;
-    let (upstream, local, remote) = {
-        let db = app.db.lock().unwrap();
-        let (local, remote): (Vec<_>, Vec<_>) = recipients
-            .into_iter()
-            .partition(|id| db.config.upstream.is_none() || db.devices.contains_key(id));
-        (db.config.upstream.clone(), local, remote)
-    };
-    let upstream = upstream.filter(|_| !remote.is_empty());
-    let local_client = crate::local_client();
-    let peer_client = upstream
-        .as_ref()
-        .map(|peer| net::peer_client(&peer.url, &peer.ca))
-        .transpose()?;
-    let mut routes = Vec::with_capacity(2);
-    if let Some(peer) = &upstream {
-        routes.push((Some(peer), remote));
-    }
-    if !local.is_empty() {
-        routes.push((None, local));
-    }
-    let api = |peer: Option<&Upstream>, path: &str| {
-        if let Some(peer) = peer {
-            net::peer_request(peer_client.as_ref().unwrap(), peer, Method::POST, path)
-        } else {
-            local_client
-                .post(format!("http://{}{path}", app.local_addr))
-                .bearer_auth(&app.local_token)
-        }
-    };
-    let check = |peer: Option<&Upstream>, index, response: reqwest::Result<reqwest::Response>| {
-        response.with_context(|| if peer.is_some() {
-            "Не удалось связаться с ведущим компьютером. Проверьте его адрес и подключение к сети."
-        } else if index > 0 {
-            "Часть получателей уже приняла передачу. Локальный сервер недоступен."
-        } else {
-            "Локальный сервер недоступен."
-        })
+    use futures_util::TryStreamExt;
+    use tokio_util::io::ReaderStream;
+    let client = crate::local_client();
+    let api = |path: &str| {
+        client
+            .post(format!("http://{}{path}", app.local_addr))
+            .bearer_auth(&app.local_token)
     };
     let progress = || {
         if let Some(job) = app.jobs.lock().unwrap().get_mut(&id) {
             job.done += 1;
+            job.file_progress = 0;
+            job.file_size = 0;
         }
     };
     if !text.trim().is_empty() {
-        for (index, (peer, to)) in routes.iter().enumerate() {
-            let response = api(*peer, "/api/text")
-                .json(&json!({"to":to,"text":text,"batch":id}))
+        result(
+            api("/api/text")
+                .json(&json!({"to":recipients,"text":text,"batch":id}))
                 .send()
-                .await;
-            result(check(*peer, index, response)?)
-                .await
-                .with_context(|| {
-                    if index == 0 {
-                        "Не удалось отправить текст."
-                    } else {
-                        "Часть получателей уже приняла текст."
-                    }
-                })?;
-        }
+                .await?,
+        )
+        .await?;
         progress();
     }
+    let to = recipients
+        .iter()
+        .map(Uuid::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     for file in files {
         let (path, name) = match &file {
             SendFile::Path(path) => (
@@ -837,36 +816,35 @@ async fn send_job(
             ),
             SendFile::Staged(draft) => (draft.path.as_ref(), draft.name.clone()),
         };
-        for (index, (peer, to)) in routes.iter().enumerate() {
-            let file = tokio::fs::File::open(path)
-                .await
-                .with_context(|| format!("Не удалось открыть «{name}»."))?;
-            let meta = file.metadata().await?;
-            if !meta.is_file() || meta.len() > model::MAX_FILE {
-                bail!("«{name}»: выберите файл размером до 2 ГБ.");
-            }
-            let to = to.iter().map(Uuid::to_string).collect::<Vec<_>>().join(",");
-            let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
-            let response = api(*peer, "/api/upload")
-                .query(&[
-                    ("to", to),
-                    ("name", name.clone()),
-                    ("batch", id.to_string()),
-                ])
-                .header("content-length", meta.len())
-                .body(body)
-                .send()
-                .await;
-            result(check(*peer, index, response)?)
-                .await
-                .with_context(|| {
-                    if index == 0 {
-                        format!("Не удалось отправить «{name}».")
-                    } else {
-                        format!("Часть получателей уже приняла «{name}».")
-                    }
-                })?;
+        let file = tokio::fs::File::open(path)
+            .await
+            .with_context(|| format!("Не удалось открыть «{name}»."))?;
+        let meta = file.metadata().await?;
+        if !meta.is_file() || meta.len() > model::MAX_FILE {
+            bail!("«{name}»: выберите файл размером до 2 ГБ.");
         }
+        if let Some(job) = app.jobs.lock().unwrap().get_mut(&id) {
+            job.file_size = meta.len();
+        }
+        let tracker = app.clone();
+        let stream = ReaderStream::new(file).inspect_ok(move |chunk| {
+            if let Some(job) = tracker.jobs.lock().unwrap().get_mut(&id) {
+                job.file_progress += chunk.len() as u64;
+            }
+        });
+        let response = api("/api/upload")
+            .query(&[
+                ("to", to.clone()),
+                ("name", name.clone()),
+                ("batch", id.to_string()),
+            ])
+            .header("content-length", meta.len())
+            .body(reqwest::Body::wrap_stream(stream))
+            .send()
+            .await?;
+        result(response)
+            .await
+            .with_context(|| format!("Не удалось отправить «{name}»."))?;
         progress();
     }
     Ok(())

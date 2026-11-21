@@ -79,7 +79,6 @@
         <div class="actions">
           <button type="button" class="primary" id="send-button" disabled><span data-icon="send"></span>Отправить</button>
         </div>
-        <progress id="progress" max="1" hidden></progress>
         <p id="send-status" class="muted" role="status" hidden></p>
       </form>
       <section class="subsection incoming">
@@ -104,10 +103,13 @@
         </fieldset>
         <label class="check"><input id="discovery" type="checkbox"> Поиск локальных компьютеров</label>
         <label class="check"><input id="autostart" type="checkbox"> Запускать сервер при входе в Windows</label>
+        <label class="check"><input id="phone-http" type="checkbox"> Открывать ThodDrop на телефоне без сертификата</label>
+        <p class="muted">В этом режиме телефон подключается по локальному HTTP. Используйте его в доверенной Wi-Fi сети. После включения отсканируйте новый QR-код.</p>
+        <p class="endpoint" id="phone-http-url" hidden></p>
         <div class="actions">
           <button type="button" class="primary" id="save-settings">Сохранить</button>
           <button type="button" id="peer-address" hidden>Обновить адрес ведущего ПК</button>
-          <button type="button" id="leave" hidden>Отключиться от ведущего ПК</button>
+          <button type="button" id="leave" hidden>Забыть ведущий ПК</button>
         </div>
         <p id="settings-status" class="muted" role="status" hidden></p>
       </form>
