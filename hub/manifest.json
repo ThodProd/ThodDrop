@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "hubApi": 1,
+  "id": "thoddrop",
+  "version": "2.0.0",
+  "primaryLanguage": "Rust",
+  "platform": "win-x64",
+  "mode": "embedded",
+  "ui": "ui/index.html",
+  "worker": {"executable": "worker/ThodDrop.exe", "arguments": []},
+  "stop": {"executable": "worker/ThodDrop.exe", "arguments": ["--stop-background"]},
+  "integration": {"executable": "worker/ThodDrop.exe", "arguments": ["--register"]},
+  "cleanup": {"executable": "worker/ThodDrop.exe", "arguments": ["--cleanup"]},
+  "permissions": ["worker", "clipboard.write"]
+}

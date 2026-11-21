@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="style.css">
+  <title>ThodDrop</title>
+  <script defer src="thodhub.js"></script>
+  <script defer src="common.js"></script>
+  <script defer src="desktop.js"></script>
+</head>
+<body class="desktop">
+  <header class="top">
+    <span class="brand"><img src="icon-192.png" alt="">ThodDrop</span>
+    <nav aria-label="Разделы" role="tablist">
+      <button id="tab-connect" aria-controls="connect" role="tab" aria-selected="true" data-tab="connect">Подключение</button>
+      <button id="tab-transfers" aria-controls="transfers" role="tab" aria-selected="false" data-tab="transfers">Передачи</button>
+      <button id="tab-settings" aria-controls="settings" role="tab" aria-selected="false" data-tab="settings">Настройки</button>
+    </nav>
+    <span id="connection" class="tag" aria-live="polite">Запуск…</span>
+  </header>
+  <main>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="connect" role="tabpanel" aria-labelledby="tab-connect">
+      <h1>Подключение</h1>
+      <div id="host-controls">
+        <p class="endpoint" id="address-display"></p>
+        <div class="actions pairing-actions">
+          <button class="primary" id="phone-invite"><span data-icon="phone"></span>Привязать телефон</button>
+          <button id="pc-invite"><span data-icon="pc"></span>Пригласить компьютер</button>
+        </div>
+        <details class="trust" id="trust">
+          <summary>Установка сертификата на телефон</summary>
+          <p>Сохраните сертификат и передайте его на телефон через доверенный канал. На iPhone установите профиль, затем включите полное доверие в «Настройки → Основные → Об этом устройстве → Доверие сертификатам». На Android установите его как сертификат CA через настройки безопасности.</p>
+          <button id="certificate">Сохранить сертификат</button>
+        </details>
+        <div id="invitation" class="invitation" hidden>
+          <img id="qr" alt="QR-код привязки" hidden>
+          <div><strong id="invite-title"></strong><p>Одно устройство, 5 минут.</p><button id="copy-invite"><span data-icon="copy"></span>Копировать</button></div>
+        </div>
+      </div>
+      <section class="subsection">
+        <div class="section-head"><h2>Мои устройства</h2><button id="to-transfers" hidden><span data-icon="send"></span>Отправить выбранным</button></div>
+        <p class="muted">Выберите одно или несколько устройств онлайн.</p>
+        <div id="devices" class="devices"></div>
+      </section>
+      <section class="subsection" id="search">
+        <h2>Компьютеры в сети</h2>
+        <div id="candidates" class="devices"></div>
+        <button id="manual-join">Ввести приглашение</button>
+      </section>
+    </section>
+    <section id="transfers" role="tabpanel" aria-labelledby="tab-transfers" hidden>
+      <h1>Передачи</h1>
+      <form id="send">
+        <h2>Отправить</h2>
+        <div id="targets" class="targets" role="group" aria-label="Получатели"></div>
+        <label class="sr" for="message">Текст для отправки</label>
+        <textarea id="message" rows="2" maxlength="24000" placeholder="Введите текст"></textarea>
+        <ul id="attachments" class="attachments" hidden></ul>
+        <div class="actions">
+          <button type="button" id="files"><span data-icon="attach"></span>Прикрепить файлы</button>
+          <button class="primary" id="send-button"><span data-icon="send"></span>Отправить</button>
+        </div>
+        <progress id="progress" max="1" hidden></progress>
+      </form>
+      <section class="subsection">
+        <h2>Входящие</h2>
+        <div id="items" class="inbox"></div>
+        <button type="button" id="more" hidden>Показать ещё</button>
+      </section>
+    </section>
+    <section id="settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <h1>Настройки</h1>
+      <form id="config">
+        <label for="pc-name">Имя этого компьютера</label>
+        <input id="pc-name" maxlength="64" required>
+        <fieldset id="server-fields">
+          <legend>Локальный сервер</legend>
+          <div class="fields">
+            <label>IPv4-адрес <input id="address" placeholder="Автоматически" inputmode="decimal"></label>
+            <label>Порт <input id="port" type="number" min="1" max="65535" required></label>
+          </div>
+          <div class="actions"><button type="button" id="auto-address">Определить адрес</button><button type="button" id="auto-port">Подобрать свободный порт</button></div>
+          <p class="muted">Адрес и порт сохраняются. Чтобы роутер не сменил IP, закрепите его для этого компьютера в настройках DHCP.</p>
+        </fieldset>
+        <label class="check"><input id="discovery" type="checkbox"> Поиск локальных компьютеров</label>
+        <label class="check"><input id="autostart" type="checkbox"> Запускать сервер при входе в Windows</label>
+        <div class="actions">
+          <button class="primary">Сохранить</button>
+          <button type="button" id="peer-address" hidden>Обновить адрес ведущего ПК</button>
+          <button type="button" id="leave" hidden>Отключиться от ведущего ПК</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <dialog id="prompt">
+    <form method="dialog">
+      <h2 id="prompt-title"></h2>
+      <p id="prompt-body" hidden></p>
+      <label id="prompt-label" hidden><span id="prompt-caption"></span><input id="prompt-value" maxlength="8192" autocomplete="off"></label>
+      <label id="prompt-file" class="check" hidden><input type="checkbox" id="prompt-delete-file"> Удалить вместе с файлом на компьютере</label>
+      <div class="actions"><button value="cancel">Отмена</button><button type="button" id="prompt-submit" class="primary">Сохранить</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

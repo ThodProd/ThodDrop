@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f8fa">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icon-180.png">
+  <link rel="icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/style.css">
+  <title>ThodDrop</title>
+  <script defer src="/common.js"></script>
+  <script defer src="/phone.js"></script>
+</head>
+<body class="phone">
+  <header class="top"><span class="brand"><img src="/icon-192.png" alt="">ThodDrop</span><span id="connection" class="tag" aria-live="polite">Подключение…</span></header>
+  <main>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="pair" hidden>
+      <h1>Привязать телефон</h1>
+      <p id="pair-help">На ведущем компьютере откройте «Подключение», создайте новый QR-код и отсканируйте его камерой.</p>
+      <form id="pair-form" hidden>
+        <label for="device-name">Имя телефона</label>
+        <input id="device-name" maxlength="64" required placeholder="Например, Алина" autocomplete="off">
+        <button class="primary">Привязать</button>
+      </form>
+    </section>
+    <div id="main" hidden>
+      <section>
+        <h1>Отправить</h1>
+        <form id="send">
+          <div id="targets" class="targets" role="group" aria-label="Получатели"></div>
+          <label class="sr" for="message">Текст для отправки</label>
+          <textarea id="message" rows="2" maxlength="24000" placeholder="Введите текст"></textarea>
+          <ul id="attachments" class="attachments" hidden></ul>
+          <div class="actions">
+            <label class="file-button"><span data-icon="attach"></span>Файлы и фото<input id="files" type="file" multiple></label>
+            <button class="primary" id="send-button"><span data-icon="send"></span>Отправить</button>
+          </div>
+          <progress id="progress" max="1" hidden></progress>
+        </form>
+      </section>
+      <section>
+        <h2>Входящие</h2>
+        <div id="items" class="inbox"></div>
+        <button type="button" id="more" hidden>Показать ещё</button>
+      </section>
+      <details class="install">
+        <summary>Добавить на главный экран</summary>
+        <p>На iPhone откройте эту страницу в Safari, нажмите «Поделиться» → «На экран “Домой”». На Android откройте меню Chrome и выберите «Установить приложение» или «Добавить на главный экран».</p>
+      </details>
+    </div>
+  </main>
+  <dialog id="confirm">
+    <form method="dialog">
+      <h2>Удалить передачу?</h2>
+      <p id="delete-name"></p>
+      <div class="actions"><button value="cancel">Отмена</button><button type="button" value="yes" class="danger" id="confirm-delete">Удалить</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
