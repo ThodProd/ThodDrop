@@ -27,7 +27,7 @@
         <p class="endpoint" id="address-display"></p>
         <div class="actions pairing-actions">
           <button class="primary" id="phone-invite"><span data-icon="phone"></span>Привязать телефон</button>
-          <button id="pc-invite"><span data-icon="pc"></span>Пригласить компьютер</button>
+          <button id="pc-invite" aria-controls="pc-invitation" aria-expanded="false"><span data-icon="pc"></span>Код приглашения для ПК</button>
         </div>
         <details class="trust" id="trust">
           <summary>Установка сертификата на телефон</summary>
@@ -36,7 +36,17 @@
         </details>
         <div id="invitation" class="invitation" hidden>
           <img id="qr" alt="QR-код привязки" hidden>
-          <div><strong id="invite-title"></strong><p>Одно устройство, 5 минут.</p><button id="copy-invite"><span data-icon="copy"></span>Копировать</button></div>
+          <div><strong>Отсканируйте камерой телефона</strong><p>Одно устройство, 5 минут.</p><button id="copy-invite"><span data-icon="copy"></span>Копировать ссылку</button></div>
+        </div>
+        <div id="pc-invitation" class="invitation pc-invitation" hidden>
+          <label for="pc-code"><strong>Код приглашения для ПК</strong></label>
+          <p>На втором компьютере откройте ThodDrop → «Подключение» → «Ввести приглашение» и вставьте код целиком.</p>
+          <textarea id="pc-code" rows="3" readonly spellcheck="false" aria-describedby="pc-code-status"></textarea>
+          <div class="actions">
+            <button id="copy-pc-code"><span data-icon="copy"></span>Скопировать код</button>
+            <button id="renew-pc-code">Создать новый код</button>
+            <span id="pc-code-status" class="muted" role="status"></span>
+          </div>
         </div>
       </div>
       <section class="subsection">
@@ -45,8 +55,10 @@
         <div id="devices" class="devices"></div>
       </section>
       <section class="subsection" id="search">
-        <h2>Компьютеры в сети</h2>
-        <div id="candidates" class="devices"></div>
+        <div id="discovery-results">
+          <h2>Компьютеры в сети</h2>
+          <div id="candidates" class="devices"></div>
+        </div>
         <button id="manual-join">Ввести приглашение</button>
       </section>
     </section>
@@ -94,13 +106,13 @@
       </form>
     </section>
   </main>
-  <dialog id="prompt">
-    <form method="dialog">
+  <dialog id="prompt" aria-labelledby="prompt-title">
+    <form>
       <h2 id="prompt-title"></h2>
       <p id="prompt-body" hidden></p>
       <label id="prompt-label" hidden><span id="prompt-caption"></span><input id="prompt-value" maxlength="8192" autocomplete="off"></label>
       <label id="prompt-file" class="check" hidden><input type="checkbox" id="prompt-delete-file"> Удалить вместе с файлом на компьютере</label>
-      <div class="actions"><button value="cancel">Отмена</button><button type="button" id="prompt-submit" class="primary">Сохранить</button></div>
+      <div class="actions"><button type="button" id="prompt-cancel">Отмена</button><button type="button" id="prompt-submit" class="primary">Сохранить</button></div>
     </form>
   </dialog>
 </body>

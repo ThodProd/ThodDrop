@@ -53,7 +53,7 @@ pub struct Database {
     pub items: Items,
     pub local_items: Items,
     pub presence: HashMap<Uuid, Instant>,
-    pub invite: Option<(String, Instant)>,
+    pub invites: HashMap<String, (String, Instant)>,
     pub network_error: Option<String>,
     pub peer_error: Option<String>,
 }
@@ -156,7 +156,7 @@ impl Server {
             local_items: model::read(&root.join("received-v2.json"))?,
             config,
             presence: HashMap::new(),
-            invite: None,
+            invites: HashMap::new(),
             network_error: None,
             peer_error: None,
         };
@@ -373,13 +373,13 @@ async fn pair(State(app): State<App>, Json(form): Json<Pair>) -> Api<Response> {
     let mut db = app.db.lock().unwrap();
     let code = model::digest(&form.code);
     if !db
-        .invite
-        .as_ref()
+        .invites
+        .get(&form.kind)
         .is_some_and(|(hash, until)| *hash == code && *until > Instant::now())
     {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
-            "QR-код истёк или уже использован. Создайте новый на компьютере.".into(),
+            "Код приглашения недействителен. Создайте новый на ведущем ПК.".into(),
         ));
     }
     if db.devices.len() >= 64 {
@@ -396,7 +396,7 @@ async fn pair(State(app): State<App>, Json(form): Json<Pair>) -> Api<Response> {
     let mut devices = db.devices.clone();
     devices.insert(id, device);
     app.save_devices(&mut db, devices)?;
-    db.invite = None;
+    db.invites.remove(&form.kind);
     db.presence.insert(id, Instant::now());
     if form.kind == "pc" {
         return Ok(Json(json!({"id":id,"token":token})).into_response());

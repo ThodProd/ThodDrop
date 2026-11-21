@@ -8,6 +8,7 @@ let view;
 let tab = 'connect';
 let invitation;
 let expiration;
+let pcExpiration;
 let files = [];
 let entries = [];
 let hasMore = false;
@@ -38,12 +39,13 @@ $('to-transfers').onclick = () => switchTab('transfers');
 function ask({title, body, field, value, file, action = 'Сохранить', danger = false}) {
   const dialog = $('prompt');
   const submit = $('prompt-submit');
+  const input = $('prompt-value');
   $('prompt-title').textContent = title;
   $('prompt-body').textContent = body || '';
   $('prompt-body').hidden = !body;
   $('prompt-label').hidden = !field;
   $('prompt-caption').textContent = field || '';
-  $('prompt-value').value = value || '';
+  input.value = value || '';
   $('prompt-file').hidden = !file;
   $('prompt-delete-file').checked = false;
   submit.textContent = action;
@@ -51,18 +53,21 @@ function ask({title, body, field, value, file, action = 'Сохранить', da
   submit.classList.toggle('primary', !danger);
   dialog.returnValue = '';
   submit.onclick = () => {
-    if (field && !$('prompt-value').value.trim()) { $('prompt-value').focus(); return; }
+    if (field && !input.value.trim()) { input.focus(); return; }
     dialog.close('yes');
   };
-  dialog.querySelector('form').onsubmit = event => {
-    event.preventDefault();
-    if (event.submitter?.value === 'cancel') dialog.close('cancel');
-    else if (!danger) submit.click();
+  $('prompt-cancel').onclick = () => dialog.close('cancel');
+  dialog.querySelector('form').onsubmit = event => event.preventDefault();
+  input.onkeydown = event => {
+    if (event.key === 'Enter' && !event.isComposing && !danger) {
+      event.preventDefault();
+      submit.click();
+    }
   };
   dialog.showModal();
-  if (field) $('prompt-value').focus();
+  if (field) input.focus();
   return new Promise(resolve => dialog.addEventListener('close', () => {
-    resolve(dialog.returnValue === 'yes' ? {value:$('prompt-value').value.trim(), file:$('prompt-delete-file').checked} : null);
+    resolve(dialog.returnValue === 'yes' ? {value:input.value.trim(), file:$('prompt-delete-file').checked} : null);
   }, {once:true}));
 }
 function hideInvite() {
@@ -71,20 +76,56 @@ function hideInvite() {
   $('invitation').hidden = true;
   $('qr').removeAttribute('src');
 }
-async function invite(kind) {
+async function invitePhone() {
   try {
-    const info = await call('invite', {kind});
+    const info = await call('invite', {kind:'phone'});
     hideInvite();
-    invitation = info.code || info.link;
-    $('invite-title').textContent = kind === 'phone' ? 'Отсканируйте камерой телефона' : 'Вставьте код приглашения на другом ПК';
-    $('qr').hidden = !info.qr;
-    if (info.qr) $('qr').src = info.qr;
+    invitation = info.link;
+    $('qr').hidden = false;
+    $('qr').src = info.qr;
     $('invitation').hidden = false;
     expiration = setTimeout(hideInvite, info.minutes * 60000);
   } catch (error) { failure(error); }
 }
-$('phone-invite').onclick = () => invite('phone');
-$('pc-invite').onclick = () => invite('pc');
+$('phone-invite').onclick = invitePhone;
+function clearPcCode(message = '') {
+  clearTimeout(pcExpiration);
+  $('pc-code').value = '';
+  $('copy-pc-code').disabled = true;
+  $('pc-code-status').textContent = message;
+}
+function closePcInvite() {
+  clearPcCode();
+  $('pc-invitation').hidden = true;
+  $('pc-invite').setAttribute('aria-expanded', 'false');
+}
+async function createPcCode() {
+  $('pc-invitation').hidden = false;
+  $('pc-invite').setAttribute('aria-expanded', 'true');
+  $('renew-pc-code').disabled = true;
+  const previous = $('pc-code').value;
+  $('copy-pc-code').disabled = true;
+  try {
+    const info = await call('invite', {kind:'pc'});
+    clearPcCode('Одно использование · ' + info.minutes + ' мин');
+    $('pc-code').value = info.code;
+    $('copy-pc-code').disabled = false;
+    pcExpiration = setTimeout(() => clearPcCode('Код истёк. Создайте новый.'), info.minutes * 60000);
+  } catch (error) {
+    $('copy-pc-code').disabled = !previous || !$('pc-code').value;
+    failure(error);
+  } finally { $('renew-pc-code').disabled = false; }
+}
+$('pc-invite').onclick = () => {
+  if ($('pc-invitation').hidden) createPcCode();
+  else $('pc-code').focus();
+};
+$('renew-pc-code').onclick = createPcCode;
+$('copy-pc-code').onclick = async () => {
+  const code = $('pc-code').value;
+  if (!code) return;
+  try { await copy(code); notice('Код приглашения скопирован.'); } catch (error) { failure(error); }
+};
 $('copy-invite').onclick = async () => {
   if (!invitation) return;
   try { await copy(invitation); notice('Приглашение скопировано.'); } catch (error) { failure(error); }
@@ -98,12 +139,13 @@ $('certificate').onclick = async () => {
 };
 async function join(candidate) {
   const answer = await ask({title:candidate ? 'Подключиться к ' + candidate.name : 'Подключить этот компьютер',
-    body:'Скопируйте приглашение с ведущего компьютера. После подключения его сеть появится на этом ПК.',
+    body:'На ведущем ПК откройте ThodDrop → «Подключение» → «Код приглашения для ПК». Нажмите «Скопировать код» и вставьте его сюда.',
     field:'Код приглашения', action:'Подключить'});
   if (!answer) return;
   try {
     await call('join', {code:answer.value, candidate:candidate?.url});
     hideInvite();
+    closePcInvite();
     dirty = false;
     await pause(650);
     await refresh(true);
@@ -161,7 +203,8 @@ function renderConnection() {
   $('host-controls').hidden = !!view.joined;
   $('address-display').textContent = view.url ? (error || view.url) : (error || 'Определение локального адреса…');
   $('phone-invite').disabled = $('pc-invite').disabled = !view.url || !!error;
-  $('search').hidden = !view.discovery || !!view.joined;
+  $('search').hidden = !!view.joined;
+  $('discovery-results').hidden = !view.discovery;
   const found = $('candidates');
   found.replaceChildren();
   if (!view.candidates?.length) found.append(el('p', 'muted', 'Ожидание компьютеров в локальной сети.'));
@@ -193,7 +236,7 @@ $('config').addEventListener('submit', async event => {
     const result = await call('config', {name:$('pc-name').value, address:$('address').value.trim() || null,
       port:$('port').valueAsNumber, discovery:$('discovery').checked, autostart:$('autostart').checked});
     dirty = false;
-    if (result.restart) { hideInvite(); await pause(650); }
+    if (result.restart) { hideInvite(); closePcInvite(); await pause(650); }
     await refresh(true);
     notice('Настройки сохранены.');
   } catch (error) { failure(error); }
@@ -340,7 +383,12 @@ async function refresh(force = false) {
   loading = true;
   try {
     const next = await call('status');
-    if (invitation && next.roster?.devices.length > view?.roster?.devices.length) hideInvite();
+    if (view?.roster && next.roster) {
+      const previous = new Set(view.roster.devices.map(device => device.id));
+      const added = next.roster.devices.filter(device => !previous.has(device.id));
+      if (invitation && added.some(device => device.kind === 'phone')) hideInvite();
+      if ($('pc-code').value && added.some(device => device.kind === 'pc')) clearPcCode('Код использован. Создайте новый для следующего устройства.');
+    }
     const changed = JSON.stringify(next) !== JSON.stringify(view);
     view = next;
     if (changed || force) { renderConnection(); renderRoster(); }

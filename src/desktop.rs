@@ -209,10 +209,13 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
         }
         _ => return Err(anyhow::anyhow!("Выберите тип устройства.").into()),
     };
-    db.invite = Some((
-        model::digest(&code),
-        Instant::now() + Duration::from_secs(minutes * 60),
-    ));
+    db.invites.insert(
+        kind.kind,
+        (
+            model::digest(&code),
+            Instant::now() + Duration::from_secs(minutes * 60),
+        ),
+    );
     Ok(Json(data))
 }
 

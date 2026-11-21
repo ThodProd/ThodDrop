@@ -63,6 +63,9 @@ details p{margin-top:9px}
 .invitation{display:flex;align-items:center;flex-wrap:wrap;gap:18px;padding:14px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
 .invitation img{width:168px;height:168px;object-fit:contain;border-radius:8px}
 .invitation p{margin:4px 0 8px;color:var(--muted)}
+.pc-invitation{display:grid;gap:8px;margin-top:12px}
+.pc-invitation p{margin:0}
+#pc-code{font-family:ui-monospace,Consolas,monospace;overflow-wrap:anywhere}
 .attachments{margin:0;padding:0;list-style:none;max-height:155px;overflow:auto}
 .attachments li{display:flex;justify-content:space-between;align-items:center;gap:4px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .item{padding:10px 0;border-bottom:1px solid var(--line)}
