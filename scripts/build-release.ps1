@@ -34,4 +34,4 @@ foreach ($asset in @('style.css', 'common.js', 'desktop.js', 'icon-192.png')) {
 Copy-Item -LiteralPath (Join-Path $root 'sdk/thodhub.js') -Destination $ui.FullName
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $stage
 & $packageScript -PackageDirectory $stage -Repository 'ThodProd/ThodDrop' -OutputDirectory $OutputDirectory `
-    -Notes 'Скачивание сертификата на телефоне, доставка на устройства вне сети, папки отправителей, группировка вложений и просмотр фото на весь экран. Для ПК добавлено повторное сканирование сети.'
+    -Notes 'Исправлена отправка и сохранение настроек внутри ThodHUB. Добавлены перетаскивание вложений, исправленный QR для телефона и сворачиваемые приглашения. Подключение к ведущему ПК сохраняет локальные устройства и поиск.'

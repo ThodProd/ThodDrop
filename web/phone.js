@@ -9,8 +9,11 @@ let refreshing = false;
 let refreshQueued = false;
 let pendingDelete;
 let inboxVersion;
-const pairCode = new URLSearchParams(location.hash.slice(1)).get('pair');
-if (pairCode) history.replaceState(null, '', '/');
+function invitationCode(url) {
+  return url.pathname.match(/^\/join\/([a-f0-9]{64})$/i)?.[1]
+    || url.searchParams.get('pair') || new URLSearchParams(url.hash.slice(1)).get('pair');
+}
+let pairCode = invitationCode(new URL(location.href));
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 async function api(path, options = {}) {
@@ -59,9 +62,14 @@ $('pair-form').addEventListener('submit', async event => {
   try {
     const url = pairCode ? null : new URL($('manual-link').value.trim());
     if (url && url.origin !== location.origin) throw new Error('Откройте веб-приложение ведущего компьютера, который создал приглашение.');
-    const code = pairCode || new URLSearchParams(url.hash.slice(1)).get('pair');
+    const code = pairCode || invitationCode(url);
     if (!code) throw new Error('В ссылке нет кода привязки.');
     await post('/api/pair', {name:$('device-name').value, code, kind:'phone'});
+    if (pairCode) {
+      history.replaceState(null, '', '/');
+      setTimeout(() => location.reload(), 0);
+      return;
+    }
     await refresh(true);
   } catch (error) { failure(error); }
   finally { if (submit) submit.disabled = false; }

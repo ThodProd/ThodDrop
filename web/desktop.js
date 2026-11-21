@@ -8,6 +8,7 @@ let view;
 let tab = 'transfers';
 let invitation;
 let expiration;
+let phoneInviteLoading = false;
 let pcExpiration = 0;
 let pcCodeLoading = false;
 let certificateSetup;
@@ -20,6 +21,7 @@ let inboxNext = 0;
 let loading = false;
 let sending = false;
 let dirty = false;
+let saving = false;
 let inboxVersion;
 
 function switchTab(id) {
@@ -79,9 +81,15 @@ function hideInvite() {
   clearTimeout(expiration);
   invitation = null;
   $('invitation').hidden = true;
+  $('phone-invite').setAttribute('aria-expanded', 'false');
+  $('phone-invite-label').textContent = 'Показать QR-код для телефона';
   $('qr').removeAttribute('src');
 }
 async function invitePhone() {
+  if (invitation) { hideInvite(); return; }
+  if (phoneInviteLoading) return;
+  phoneInviteLoading = true;
+  $('phone-invite').disabled = true;
   try {
     const info = await call('invite', {kind:'phone'});
     hideInvite();
@@ -89,8 +97,14 @@ async function invitePhone() {
     $('qr').hidden = false;
     $('qr').src = info.qr;
     $('invitation').hidden = false;
+    $('phone-invite').setAttribute('aria-expanded', 'true');
+    $('phone-invite-label').textContent = 'Скрыть QR-код';
     expiration = setTimeout(hideInvite, info.minutes * 60000);
   } catch (error) { failure(error); }
+  finally {
+    phoneInviteLoading = false;
+    $('phone-invite').disabled = !invitation && (!view?.url || !!view?.networkError);
+  }
 }
 $('phone-invite').onclick = invitePhone;
 function clearPcCode() {
@@ -125,9 +139,16 @@ async function createPcCode(renew = false) {
     else $('pc-code-status').textContent = error.message;
   } finally {
     pcCodeLoading = false;
-    $('renew-pc-code').disabled = !!view?.joined || !view?.url || !!view?.networkError;
+    $('renew-pc-code').disabled = !view?.url || !!view?.networkError;
   }
 }
+$('pc-invite').onclick = () => {
+  const panel = $('pc-invitation');
+  panel.hidden = !panel.hidden;
+  $('pc-invite').setAttribute('aria-expanded', String(!panel.hidden));
+  $('pc-invite-label').textContent = panel.hidden ? 'Показать код приглашения' : 'Скрыть код приглашения';
+  if (!panel.hidden) void createPcCode();
+};
 $('renew-pc-code').onclick = () => createPcCode(true);
 setInterval(renderPcTimer, 1000);
 $('copy-pc-code').onclick = async () => {
@@ -172,6 +193,7 @@ async function loadCertificateSetup() {
 $('scan').onclick = async () => {
   const status = $('scan-status');
   $('scan').disabled = true;
+  $('scan').dataset.running = 'true';
   status.hidden = false;
   status.textContent = 'Поиск компьютеров…';
   try {
@@ -180,13 +202,17 @@ $('scan').onclick = async () => {
     await refresh(true);
     status.textContent = view?.candidates?.length ? 'Поиск завершён.' : 'Компьютеры не найдены.';
   } catch (error) { status.textContent = error.message; }
-  finally { $('scan').disabled = false; }
+  finally { delete $('scan').dataset.running; $('scan').disabled = !view?.discovery; }
 };
 async function join(candidate) {
+  if (view?.joined) {
+    notice('Этот ПК уже подключён к ведущему. Чтобы добавить другой компьютер, покажите на этом ПК свой код приглашения.', true);
+    return;
+  }
   const answer = await ask({title:candidate ? 'Подключиться к ' + candidate.name : 'Подключить этот компьютер',
     body: candidate
       ? 'Введите пять символов из раздела «Подключение» → «Код приглашения для ПК» на ведущем компьютере.'
-      : 'На ведущем ПК откройте «Подключение» → «Код приглашения для ПК» → «Компьютер не появляется в списке». Скопируйте полное приглашение и вставьте его сюда.',
+      : 'На другом ПК нажмите «Показать код приглашения» → «Скопировать полное приглашение» и вставьте его сюда.',
     field: candidate ? 'Код приглашения' : 'Полное приглашение', action:'Подключить'});
   if (!answer) return;
   try {
@@ -231,7 +257,7 @@ function renderRoster() {
   for (const device of devices) {
     const row = el('div', 'device');
     row.append(deviceButton(device, renderRoster), el('span', 'state' + (device.online ? ' online' : ''), device.online ? 'В сети' : 'Не в сети'));
-    if (!view.joined) {
+    if (device.managed) {
       row.append(button('Переименовать', () => editDevice(device, false), 'edit', true));
       const revoke = button('Удалить устройство', () => editDevice(device, true), 'remove', true);
       revoke.classList.add('remove');
@@ -247,23 +273,34 @@ function renderConnection() {
   status.textContent = error ? 'Нет связи' : view.joined ? 'В сети' : view.url ? 'Сервер запущен' : 'Запуск…';
   status.title = error || '';
   status.classList.toggle('online', !error && !!(view.url || view.joined));
-  $('host-controls').hidden = !!view.joined;
-  $('address-display').textContent = view.url ? (error || view.url) : (error || 'Определение локального адреса…');
-  $('phone-invite').disabled = !view.url || !!error;
-  $('renew-pc-code').disabled = pcCodeLoading || !view.url || !!error;
-  $('certificate-settings').hidden = !!view.joined;
+  $('address-display').textContent = view.networkError || view.url || 'Определение локального адреса…';
+  $('peer-status').hidden = !view.joined;
+  $('peer-status').textContent = view.joined
+    ? 'Ведущий ПК · ' + (view.peerName || view.joined) + (view.peerError ? ' · нет связи' : '')
+    : '';
+  $('phone-invite').disabled = phoneInviteLoading || (!invitation && (!view.url || !!view.networkError));
+  $('pc-invite').disabled = $('pc-invitation').hidden && (!view.url || !!view.networkError);
+  $('renew-pc-code').disabled = pcCodeLoading || !view.url || !!view.networkError;
   $('certificate-setup').hidden = !view.certificateUrl || view.certificateUrl !== certificateSetup?.link;
-  $('search').hidden = !!view.joined;
-  $('discovery-results').hidden = !view.discovery;
+  $('scan').disabled = !view.discovery || $('scan').dataset.running === 'true';
   const found = $('candidates');
   found.replaceChildren();
-  if (!view.candidates?.length) found.append(el('p', 'muted', 'Ожидание компьютеров в локальной сети.'));
-  for (const candidate of view.candidates || []) {
-    const row = el('div', 'device');
-    row.append(el('strong', '', candidate.name), el('span', 'state', candidate.url), button('Подключиться', () => join(candidate)));
+  const candidates = new Map((view.candidates || []).map(candidate => [candidate.url, candidate]));
+  if (view.joined && !candidates.has(view.joined)) {
+    candidates.set(view.joined, {url:view.joined, name:view.peerName || 'Ведущий ПК'});
+  }
+  if (!candidates.size && view.discovery) found.append(el('p', 'muted', 'Поиск компьютеров в локальной сети…'));
+  if (!candidates.size && !view.discovery) found.append(el('p', 'muted', 'Поиск отключён в настройках.'));
+  for (const candidate of candidates.values()) {
+    const row = el('div', 'device candidate');
+    const detail = el('div', 'candidate-info');
+    detail.append(el('strong', '', candidate.name), el('small', '', candidate.url));
+    const connected = candidate.url === view.joined;
+    row.append(detail, connected
+      ? el('span', 'state' + (view.peerError ? '' : ' online'), view.peerError ? 'Нет связи' : 'Подключён')
+      : button('Подключиться', () => join(candidate)));
     found.append(row);
   }
-  $('server-fields').disabled = !!view.joined;
   $('peer-address').hidden = !view.joined;
   $('leave').hidden = !view.joined;
   if (!dirty) {
@@ -280,24 +317,105 @@ $('auto-port').onclick = async () => {
   try { $('port').value = (await call('freePort', {address:$('address').value.trim() || null})).port; dirty = true; }
   catch (error) { failure(error); }
 };
-$('config').addEventListener('submit', async event => {
-  event.preventDefault();
+async function saveSettings() {
+  if (saving || !$('config').reportValidity()) return;
+  const status = $('settings-status');
+  const submit = $('save-settings');
+  saving = submit.disabled = true;
+  status.hidden = false;
+  status.classList.remove('error');
+  status.textContent = 'Сохранение…';
   try {
     const result = await call('config', {name:$('pc-name').value, address:$('address').value.trim() || null,
       port:$('port').valueAsNumber, discovery:$('discovery').checked, autostart:$('autostart').checked});
     dirty = false;
+    status.textContent = result.nameSyncPending
+      ? 'Настройки сохранены. Имя на ведущем ПК обновится при синхронизации.'
+      : 'Настройки сохранены.';
     if (result.restart) { hideInvite(); clearPcCode(); await pause(650); }
     await refresh(true);
-    notice('Настройки сохранены.');
-  } catch (error) { failure(error); }
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = error.message;
+  } finally { saving = submit.disabled = false; }
+}
+$('save-settings').onclick = saveSettings;
+$('config').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && event.target.matches('input:not([type="checkbox"])') && !event.isComposing) {
+    event.preventDefault();
+    void saveSettings();
+  }
 });
 
 function updateFiles() {
-  showAttachments(files.map(path => ({name:path.split(/[\\/]/).at(-1)})), index => {
+  showAttachments(files, index => {
     if (sending) return;
     files.splice(index, 1);
     updateFiles();
   });
+}
+function addFiles(incoming) {
+  if ([...incoming].some(file => file.size > 2 * 1024 ** 3)) {
+    notice('Один файл может занимать до 2 ГБ.', true);
+    return;
+  }
+  if (files.length + incoming.length > 512) {
+    notice('Можно прикрепить до 512 файлов за одну отправку.', true);
+    return;
+  }
+  files.push(...incoming);
+  updateFiles();
+}
+$('files').onchange = event => {
+  if (!sending) addFiles(event.target.files);
+  event.target.value = '';
+};
+const dropZone = $('drop-zone');
+const acceptsDrop = event => tab === 'transfers'
+  && [...event.dataTransfer.types].some(type => ['Files', 'text/plain', 'text/uri-list'].includes(type));
+document.addEventListener('dragover', event => {
+  if (!acceptsDrop(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = sending ? 'none' : 'copy';
+  dropZone.classList.toggle('dragging', !sending);
+});
+document.addEventListener('dragleave', event => {
+  if (!event.relatedTarget) dropZone.classList.remove('dragging');
+});
+document.addEventListener('drop', event => {
+  dropZone.classList.remove('dragging');
+  if (!acceptsDrop(event)) return;
+  event.preventDefault();
+  if (sending) return;
+  if (event.dataTransfer.files.length) {
+    addFiles(event.dataTransfer.files);
+    return;
+  }
+  const text = event.dataTransfer.getData('text/plain') || event.dataTransfer.getData('text/uri-list').trim();
+  if (!text) return;
+  const field = $('message');
+  const combined = field.value ? field.value + '\n' + text : text;
+  if (combined.length > field.maxLength) {
+    notice('Добавленный текст превышает допустимый размер.', true);
+    return;
+  }
+  field.value = combined;
+  field.focus();
+});
+
+async function stageFile(file, id, onProgress) {
+  const chunkSize = 256 * 1024;
+  let offset = 0;
+  do {
+    const bytes = new Uint8Array(await file.slice(offset, offset + chunkSize).arrayBuffer());
+    let binary = '';
+    for (let start = 0; start < bytes.length; start += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(start, start + 8192));
+    }
+    await call('stageAttachment', {id, name:file.name, size:file.size, offset, data:btoa(binary)});
+    offset += bytes.length;
+    onProgress(file.size === 0 ? 1 : offset / file.size);
+  } while (offset < file.size);
 }
 async function dialogJob(method) {
   const job = await call(method);
@@ -310,14 +428,7 @@ async function dialogJob(method) {
     }
   }
 }
-$('files').onclick = async () => {
-  $('files').disabled = true;
-  try { files = [...new Set([...files, ...await dialogJob('pick')])]; updateFiles(); }
-  catch (error) { failure(error); }
-  finally { $('files').disabled = sending; }
-};
-$('send').addEventListener('submit', async event => {
-  event.preventDefault();
+$('send-button').onclick = async () => {
   if (sending || !selected.size) return;
   const text = $('message').value;
   if (!files.length && !text.trim()) { notice('Добавьте файлы или текст.', true); return; }
@@ -325,15 +436,26 @@ $('send').addEventListener('submit', async event => {
   const to = [...selected];
   const total = files.length + Number(hasText);
   const progress = $('progress');
+  const status = $('send-status');
   sending = true;
   $('send').classList.add('sending');
   $('files').disabled = $('message').disabled = true;
   progress.hidden = false;
   progress.max = total;
   progress.value = 0;
+  status.hidden = false;
+  status.textContent = files.length ? 'Подготовка вложений…' : 'Отправка…';
   renderRoster();
+  const attachments = [];
   try {
-    const job = await call('send', {to, files, text});
+    for (const [index, file] of files.entries()) {
+      const id = crypto.randomUUID();
+      attachments.push(id);
+      await stageFile(file, id, fraction => { progress.value = index + fraction; });
+    }
+    progress.value = 0;
+    status.textContent = 'Отправка…';
+    const job = await call('send', {to, attachments, text});
     let done = 0;
     for (;;) {
       const state = await call('job', {id:job.id});
@@ -349,15 +471,18 @@ $('send').addEventListener('submit', async event => {
       }
       await pause(400);
     }
-  } catch (error) { failure(error); }
-  finally {
+  } catch (error) {
+    if (attachments.length) void call('discardAttachments', attachments).catch(() => {});
+    failure(error);
+  } finally {
     sending = false;
     $('send').classList.remove('sending');
     $('files').disabled = $('message').disabled = false;
     progress.hidden = true;
+    status.hidden = true;
     renderRoster();
   }
-});
+};
 async function itemAction(item, kind) {
   try {
     if (kind === 'delete') {
@@ -436,10 +561,13 @@ async function refresh(force = false) {
       const added = next.roster.devices.filter(device => !previous.has(device.id));
       if (invitation && added.some(device => device.kind === 'phone')) hideInvite();
     }
+    if (view?.nameSyncPending && !next.nameSyncPending && !next.peerError && !dirty) {
+      $('settings-status').textContent = 'Имя обновлено на ведущем ПК.';
+    }
     const changed = JSON.stringify(next) !== JSON.stringify(view);
     view = next;
     if (changed || force) { renderConnection(); renderRoster(); }
-    if (!next.joined && next.url && !next.networkError && (!next.pcCodeActive || pcExpiration <= Date.now())) {
+    if (next.url && !next.networkError && !$('pc-invitation').hidden && (!next.pcCodeActive || pcExpiration <= Date.now())) {
       void createPcCode();
     }
     if (tab === 'settings') void loadCertificateSetup();

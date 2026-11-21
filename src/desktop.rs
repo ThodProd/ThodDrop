@@ -10,10 +10,14 @@ use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
 };
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
+    io::Write,
     net::Ipv4Addr,
     path::PathBuf,
     time::{Duration, Instant},
@@ -35,6 +39,8 @@ pub fn routes() -> Router<App> {
         .route("/local/inbox", get(inbox))
         .route("/local/inbox/{id}/action", post(action))
         .route("/local/pick", post(pick))
+        .route("/local/attachment", post(stage_attachment))
+        .route("/local/attachment/discard", post(discard_attachments))
         .route("/local/send", post(send))
         .route("/local/job/{id}", get(job))
         .route("/local/dialog/{id}", get(dialog))
@@ -42,27 +48,46 @@ pub fn routes() -> Router<App> {
 }
 
 async fn status(State(app): State<App>) -> Json<Value> {
-    let (mut data, host, upstream, discovery) = {
+    let (mut data, host, peer_roster, peer_online, discovery) = {
         let db = app.db.lock().unwrap();
         (
             json!({"name":db.config.name,"address":db.config.address,"port":db.config.port,
             "discovery":db.config.discovery,"autostart":db.config.autostart,"url":net::url(&db.config),
             "networkError":db.network_error,"peerError":db.peer_error,
             "pcCodeActive":db.pc_code.as_ref().is_some_and(|code| code.remaining() > 0),
+            "nameSyncPending":db.config.rename_pending,
             "joined":db.config.upstream.as_ref().map(|upstream| &upstream.url)}),
             db.config.host,
-            db.config.upstream.clone(),
+            db.peer_roster.clone(),
+            db.peer_error.is_none(),
             db.config.discovery,
         )
     };
-    data["roster"] = if let Some(upstream) = upstream {
-        match contact(&upstream, reqwest::Method::GET, "/api/roster", None).await {
-            Ok(roster) => roster,
-            Err(_) => json!({"self":upstream.device,"devices":[]}),
+    let mut roster = app.roster(host);
+    if let Some(devices) = roster["devices"].as_array_mut() {
+        for device in devices.iter_mut() {
+            device["managed"] = json!(true);
         }
-    } else {
-        app.roster(host)
-    };
+        if let Some(peer) = peer_roster
+            && let Some(remote) = peer["devices"].as_array()
+        {
+            if let Some(peer_host) = remote.last() {
+                data["peerName"] = peer_host["name"].clone();
+            }
+            for device in remote {
+                if device["id"] != peer["self"]
+                    && !devices.iter().any(|local| local["id"] == device["id"])
+                {
+                    let mut device = device.clone();
+                    if !peer_online {
+                        device["online"] = json!(false);
+                    }
+                    devices.push(device);
+                }
+            }
+        }
+    }
+    data["roster"] = roster;
     if discovery {
         let address = net::url(&app.db.lock().unwrap().config);
         let mut candidates = app
@@ -99,33 +124,18 @@ struct Settings {
 }
 async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Api<Json<Value>> {
     let new_name = model::name(&settings.name)?;
-    let rename = {
-        let db = app.db.lock().unwrap();
-        db.config
-            .upstream
-            .clone()
-            .filter(|_| db.config.name != new_name)
-    };
-    if let Some(upstream) = rename {
-        contact(
-            &upstream,
-            reqwest::Method::POST,
-            "/api/name",
-            Some(json!({"name":new_name})),
-        )
-        .await?;
-    }
     let mut db = app.db.lock().unwrap();
     let mut config = db.config.clone();
+    if config.upstream.is_some() && config.name != new_name {
+        config.rename_pending = true;
+    }
     config.name = new_name;
     if settings.port == 0 {
         return Err(anyhow::anyhow!("Укажите порт от 1 до 65535.").into());
     }
     config.address = settings.address.or_else(net::default_address);
     config.port = settings.port;
-    if config.upstream.is_none()
-        && (config.address != db.config.address || config.port != db.config.port)
-    {
+    if config.address != db.config.address || config.port != db.config.port {
         net::lan_listener(
             config.address.context("Локальный IPv4-адрес недоступен.")?,
             config.port,
@@ -137,7 +147,9 @@ async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Ap
         || config.port != db.config.port
         || config.address != db.config.address
         || config.discovery != db.config.discovery;
-    win::autostart(&app.root, config.autostart)?;
+    if config.autostart != db.config.autostart {
+        win::autostart(&app.root, config.autostart)?;
+    }
     if let Err(err) = app.save_config(&mut db, config) {
         let _ = win::autostart(&app.root, db.config.autostart);
         return Err(err.into());
@@ -145,7 +157,9 @@ async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Ap
     if restart {
         restart_later(app.clone());
     }
-    Ok(Json(json!({"restart":restart})))
+    Ok(Json(
+        json!({"restart":restart,"nameSyncPending":db.config.rename_pending}),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -190,9 +204,6 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
         ));
     }
     let mut db = app.db.lock().unwrap();
-    if db.config.upstream.is_some() {
-        return Err(anyhow::anyhow!("Создайте приглашение на ведущем компьютере.").into());
-    }
     if let Some(err) = &db.network_error {
         return Err(anyhow::anyhow!("{err}").into());
     }
@@ -206,7 +217,7 @@ async fn invite(State(app): State<App>, Json(kind): Json<InviteKind>) -> Api<Jso
     let code = model::secret();
     let minutes = 5;
     let expires = Instant::now() + Duration::from_secs(minutes * 60);
-    let link = format!("{url}/#pair={code}");
+    let link = format!("{url}/join/{code}");
     let data = match kind.kind.as_str() {
         "pc" => {
             let invite = Invite {
@@ -279,6 +290,9 @@ struct Join {
     candidate: Option<String>,
 }
 async fn join(State(app): State<App>, Json(request): Json<Join>) -> Api<Json<Value>> {
+    if app.db.lock().unwrap().config.upstream.is_some() {
+        return Err(anyhow::anyhow!("Этот ПК уже участвует в другой сети. Чтобы добавить компьютер в свою сеть, покажите ему свой код приглашения.").into());
+    }
     if request.code.len() > 8192 {
         return Err(anyhow::anyhow!("Приглашение слишком длинное.").into());
     }
@@ -337,6 +351,7 @@ async fn join(State(app): State<App>, Json(request): Json<Join>) -> Api<Json<Val
     let mut db = app.db.lock().unwrap();
     let mut config = db.config.clone();
     config.upstream = Some(upstream);
+    config.rename_pending = false;
     app.save_config(&mut db, config)?;
     restart_later(app.clone());
     Ok(Json(json!({"restart":true})))
@@ -346,6 +361,7 @@ async fn leave(State(app): State<App>) -> Api<Json<Value>> {
     let mut db = app.db.lock().unwrap();
     let mut config = db.config.clone();
     config.upstream = None;
+    config.rename_pending = false;
     app.save_config(&mut db, config)?;
     restart_later(app.clone());
     Ok(Json(json!({"restart":true})))
@@ -587,19 +603,129 @@ async fn dialog(State(app): State<App>, Path(id): Path<Uuid>) -> Api<Json<Dialog
 struct SendRequest {
     to: Vec<Uuid>,
     text: String,
+    #[serde(default)]
     files: Vec<PathBuf>,
+    #[serde(default)]
+    attachments: Vec<Uuid>,
 }
+
+pub struct Attachment {
+    path: tempfile::TempPath,
+    name: String,
+    size: u64,
+    received: u64,
+    updated: Instant,
+}
+
+#[derive(Deserialize)]
+struct AttachmentChunk {
+    id: Uuid,
+    name: String,
+    size: u64,
+    offset: u64,
+    data: String,
+}
+
+async fn stage_attachment(
+    State(app): State<App>,
+    Json(chunk): Json<AttachmentChunk>,
+) -> Api<Json<Value>> {
+    const CHUNK_LIMIT: usize = 256 * 1024;
+    let bytes = STANDARD
+        .decode(&chunk.data)
+        .context("Не удалось прочитать вложение.")?;
+    if bytes.len() > CHUNK_LIMIT
+        || chunk.size > model::MAX_FILE
+        || chunk.offset.saturating_add(bytes.len() as u64) > chunk.size
+        || (bytes.is_empty() && chunk.size != 0)
+    {
+        return Err(anyhow::anyhow!("Недопустимый размер вложения. Максимум 2 ГБ на файл.").into());
+    }
+    let mut drafts = app.attachments.lock().unwrap();
+    drafts.retain(|_, draft| draft.updated.elapsed() < Duration::from_secs(3600));
+    if !drafts.contains_key(&chunk.id) {
+        if chunk.offset != 0
+            || drafts.len() >= 512
+            || drafts.values().map(|draft| draft.size).sum::<u64>() + chunk.size
+                > model::MAX_STORAGE
+        {
+            return Err(anyhow::anyhow!(
+                "Не удалось подготовить вложение. Попробуйте отправить меньше файлов за раз."
+            )
+            .into());
+        }
+        let path = tempfile::Builder::new()
+            .prefix(".upload-")
+            .tempfile_in(app.root.join("runtime"))?
+            .into_temp_path();
+        drafts.insert(
+            chunk.id,
+            Attachment {
+                path,
+                name: model::file_name(&chunk.name),
+                size: chunk.size,
+                received: 0,
+                updated: Instant::now(),
+            },
+        );
+    }
+    let draft = drafts.get_mut(&chunk.id).unwrap();
+    if draft.size != chunk.size || draft.received != chunk.offset {
+        return Err(anyhow::anyhow!("Подготовка вложения прервалась. Повторите отправку.").into());
+    }
+    let mut file = std::fs::OpenOptions::new().append(true).open(&draft.path)?;
+    if let Err(error) = file.write_all(&bytes) {
+        let _ = file.set_len(draft.received);
+        return Err(error.into());
+    }
+    draft.received += bytes.len() as u64;
+    draft.updated = Instant::now();
+    Ok(Json(json!(true)))
+}
+
+async fn discard_attachments(State(app): State<App>, Json(ids): Json<Vec<Uuid>>) -> Json<Value> {
+    let mut drafts = app.attachments.lock().unwrap();
+    for id in ids {
+        drafts.remove(&id);
+    }
+    Json(json!(true))
+}
+
+enum SendFile {
+    Path(PathBuf),
+    Staged(Attachment),
+}
+
 async fn send(State(app): State<App>, Json(request): Json<SendRequest>) -> Api<Json<Value>> {
-    let total = request.files.len() + usize::from(!request.text.trim().is_empty());
+    let total = request.files.len()
+        + request.attachments.len()
+        + usize::from(!request.text.trim().is_empty());
     if total == 0 || total > model::MAX_ITEMS || request.to.is_empty() {
         return Err(anyhow::anyhow!("Выберите получателей и добавьте файлы или текст.").into());
     }
     let id = Uuid::new_v4();
+    let staged;
     {
         let mut jobs = app.jobs.lock().unwrap();
         if jobs.values().any(|job| !job.finished) {
             return Err(anyhow::anyhow!("Дождитесь окончания отправки.").into());
         }
+        let mut drafts = app.attachments.lock().unwrap();
+        let mut unique = std::collections::HashSet::new();
+        if !request.attachments.iter().all(|id| {
+            unique.insert(*id)
+                && drafts
+                    .get(id)
+                    .is_some_and(|draft| draft.received == draft.size)
+        }) {
+            return Err(anyhow::anyhow!("Одно из вложений не готово. Повторите отправку.").into());
+        }
+        staged = request
+            .attachments
+            .iter()
+            .filter_map(|id| drafts.remove(id))
+            .map(SendFile::Staged)
+            .collect::<Vec<_>>();
         jobs.clear();
         jobs.insert(
             id,
@@ -610,10 +736,11 @@ async fn send(State(app): State<App>, Json(request): Json<SendRequest>) -> Api<J
         );
     }
     tokio::spawn(async move {
-        let error = send_job(&app, id, request)
+        let files = request.files.into_iter().map(SendFile::Path).chain(staged);
+        let error = send_job(&app, id, request.to, request.text, files)
             .await
             .err()
-            .map(|err| err.to_string());
+            .map(|err| format!("{err:#}"));
         if let Some(job) = app.jobs.lock().unwrap().get_mut(&id) {
             job.error = error;
             job.finished = true;
@@ -628,69 +755,118 @@ async fn job(State(app): State<App>, Path(id): Path<Uuid>) -> Api<Json<Job>> {
     )?))
 }
 
-async fn send_job(app: &App, id: Uuid, request: SendRequest) -> Result<()> {
+async fn send_job(
+    app: &App,
+    id: Uuid,
+    recipients: Vec<Uuid>,
+    text: String,
+    files: impl Iterator<Item = SendFile>,
+) -> Result<()> {
     use reqwest::Method;
-    let upstream = app.db.lock().unwrap().config.upstream.clone();
-    let client = if let Some(upstream) = &upstream {
-        net::peer_client(&upstream.url, &upstream.ca)?
-    } else {
-        crate::local_client()
+    let (upstream, local, remote) = {
+        let db = app.db.lock().unwrap();
+        let (local, remote): (Vec<_>, Vec<_>) = recipients
+            .into_iter()
+            .partition(|id| db.config.upstream.is_none() || db.devices.contains_key(id));
+        (db.config.upstream.clone(), local, remote)
     };
-    let api = |method, path: &str| {
-        if let Some(upstream) = &upstream {
-            net::peer_request(&client, upstream, method, path)
+    let upstream = upstream.filter(|_| !remote.is_empty());
+    let local_client = crate::local_client();
+    let peer_client = upstream
+        .as_ref()
+        .map(|peer| net::peer_client(&peer.url, &peer.ca))
+        .transpose()?;
+    let mut routes = Vec::with_capacity(2);
+    if let Some(peer) = &upstream {
+        routes.push((Some(peer), remote));
+    }
+    if !local.is_empty() {
+        routes.push((None, local));
+    }
+    let api = |peer: Option<&Upstream>, path: &str| {
+        if let Some(peer) = peer {
+            net::peer_request(peer_client.as_ref().unwrap(), peer, Method::POST, path)
         } else {
-            client
-                .request(method, format!("http://{}{path}", app.local_addr))
+            local_client
+                .post(format!("http://{}{path}", app.local_addr))
                 .bearer_auth(&app.local_token)
         }
+    };
+    let check = |peer: Option<&Upstream>, index, response: reqwest::Result<reqwest::Response>| {
+        response.with_context(|| if peer.is_some() {
+            "Не удалось связаться с ведущим компьютером. Проверьте его адрес и подключение к сети."
+        } else if index > 0 {
+            "Часть получателей уже приняла передачу. Локальный сервер недоступен."
+        } else {
+            "Локальный сервер недоступен."
+        })
     };
     let progress = || {
         if let Some(job) = app.jobs.lock().unwrap().get_mut(&id) {
             job.done += 1;
         }
     };
-    let text = request.text.trim();
-    if !text.is_empty() {
-        result(
-            api(Method::POST, "/api/text")
-                .json(&json!({"to":request.to,"text":request.text,"batch":id}))
+    if !text.trim().is_empty() {
+        for (index, (peer, to)) in routes.iter().enumerate() {
+            let response = api(*peer, "/api/text")
+                .json(&json!({"to":to,"text":text,"batch":id}))
                 .send()
-                .await?,
-        )
-        .await?;
+                .await;
+            result(check(*peer, index, response)?)
+                .await
+                .with_context(|| {
+                    if index == 0 {
+                        "Не удалось отправить текст."
+                    } else {
+                        "Часть получателей уже приняла текст."
+                    }
+                })?;
+        }
         progress();
     }
-    for path in request.files {
-        let name = model::file_name(
-            path.file_name()
-                .context("Файл недоступен.")?
-                .to_string_lossy()
-                .as_ref(),
-        );
-        let file = tokio::fs::File::open(&path)
-            .await
-            .with_context(|| format!("Не удалось открыть «{name}»."))?;
-        let meta = file.metadata().await?;
-        if !meta.is_file() || meta.len() > model::MAX_FILE {
-            bail!("«{name}»: выберите файл размером до 2 ГБ.");
-        }
-        let to = request
-            .to
-            .iter()
-            .map(Uuid::to_string)
-            .collect::<Vec<_>>()
-            .join(",");
-        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
-        result(
-            api(Method::POST, "/api/upload")
-                .query(&[("to", to), ("name", name), ("batch", id.to_string())])
+    for file in files {
+        let (path, name) = match &file {
+            SendFile::Path(path) => (
+                path.as_path(),
+                model::file_name(
+                    &path
+                        .file_name()
+                        .context("Файл недоступен.")?
+                        .to_string_lossy(),
+                ),
+            ),
+            SendFile::Staged(draft) => (draft.path.as_ref(), draft.name.clone()),
+        };
+        for (index, (peer, to)) in routes.iter().enumerate() {
+            let file = tokio::fs::File::open(path)
+                .await
+                .with_context(|| format!("Не удалось открыть «{name}»."))?;
+            let meta = file.metadata().await?;
+            if !meta.is_file() || meta.len() > model::MAX_FILE {
+                bail!("«{name}»: выберите файл размером до 2 ГБ.");
+            }
+            let to = to.iter().map(Uuid::to_string).collect::<Vec<_>>().join(",");
+            let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(file));
+            let response = api(*peer, "/api/upload")
+                .query(&[
+                    ("to", to),
+                    ("name", name.clone()),
+                    ("batch", id.to_string()),
+                ])
                 .header("content-length", meta.len())
                 .body(body)
                 .send()
-                .await?,
-        )
-        .await?;
+                .await;
+            result(check(*peer, index, response)?)
+                .await
+                .with_context(|| {
+                    if index == 0 {
+                        format!("Не удалось отправить «{name}».")
+                    } else {
+                        format!("Часть получателей уже приняла «{name}».")
+                    }
+                })?;
+        }
         progress();
     }
     Ok(())

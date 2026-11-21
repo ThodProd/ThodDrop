@@ -18,6 +18,8 @@ pub struct Config {
     pub discovery: bool,
     pub autostart: bool,
     pub upstream: Option<Upstream>,
+    #[serde(default)]
+    pub rename_pending: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -29,6 +31,7 @@ impl Default for Config {
             discovery: true,
             autostart: true,
             upstream: None,
+            rename_pending: false,
         }
     }
 }

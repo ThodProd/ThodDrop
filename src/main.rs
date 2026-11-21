@@ -131,6 +131,8 @@ async fn dispatch(
         ),
         "item" => (true, format!("/local/inbox/{}/action", id()?)),
         "pick" => (true, "/local/pick".into()),
+        "stageAttachment" => (true, "/local/attachment".into()),
+        "discardAttachments" => (true, "/local/attachment/discard".into()),
         "send" => (true, "/local/send".into()),
         "job" => (false, format!("/local/job/{}", id()?)),
         "dialogJob" => (false, format!("/local/dialog/{}", id()?)),

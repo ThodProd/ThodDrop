@@ -25,14 +25,16 @@
       <h1>Подключение</h1>
       <div id="host-controls">
         <p class="endpoint" id="address-display"></p>
+        <p class="muted" id="peer-status" hidden></p>
         <div class="actions pairing-actions">
-          <button class="primary" id="phone-invite"><span data-icon="phone"></span>Привязать телефон</button>
+          <button class="primary" id="phone-invite" aria-controls="invitation" aria-expanded="false"><span data-icon="phone"></span><span id="phone-invite-label">Показать QR-код для телефона</span></button>
+          <button id="pc-invite" aria-controls="pc-invitation" aria-expanded="false"><span data-icon="pc"></span><span id="pc-invite-label">Показать код приглашения</span></button>
         </div>
         <div id="invitation" class="invitation" hidden>
           <img id="qr" alt="QR-код привязки" hidden>
           <div><strong>Отсканируйте камерой телефона</strong><p>Одно устройство, 5 минут.</p><div class="actions"><button id="copy-invite"><span data-icon="copy"></span>Копировать ссылку</button><button id="open-certificate">Установить сертификат</button></div></div>
         </div>
-        <div id="pc-invitation" class="invitation pc-invitation">
+        <div id="pc-invitation" class="invitation pc-invitation" hidden>
           <label for="pc-code"><strong>Код приглашения для ПК</strong></label>
           <p>На втором ПК выберите этот компьютер в списке «Компьютеры в сети» и введите пять символов.</p>
           <div class="actions">
@@ -43,12 +45,8 @@
             </span>
             <button id="copy-pc-code" class="icon-button" title="Скопировать код" aria-label="Скопировать код" disabled><span data-icon="copy"></span></button>
             <button id="renew-pc-code">Обновить код</button>
-          </div>
-          <details>
-            <summary>Компьютер не появляется в списке</summary>
-            <p>Скопируйте полное приглашение и вставьте его в окне «Ввести приглашение» на втором ПК.</p>
             <button id="copy-full-pc-code" disabled><span data-icon="copy"></span>Скопировать полное приглашение</button>
-          </details>
+          </div>
         </div>
       </div>
       <section class="subsection">
@@ -72,12 +70,17 @@
         <div id="targets" class="targets" role="group" aria-label="Получатели"></div>
         <label class="sr" for="message">Текст для отправки</label>
         <textarea id="message" rows="2" maxlength="24000" placeholder="Введите текст"></textarea>
+        <div id="drop-zone" class="drop-zone">
+          <span data-icon="attach"></span>
+          <div><strong>Перетащите файлы или текст</strong><small>Фото, документы и другие вложения</small></div>
+          <label class="file-button">Выбрать файлы<input id="files" type="file" multiple aria-label="Выбрать файлы"></label>
+        </div>
         <ul id="attachments" class="attachments" hidden></ul>
         <div class="actions">
-          <button type="button" id="files"><span data-icon="attach"></span>Прикрепить файлы</button>
-          <button class="primary" id="send-button" disabled><span data-icon="send"></span>Отправить</button>
+          <button type="button" class="primary" id="send-button" disabled><span data-icon="send"></span>Отправить</button>
         </div>
         <progress id="progress" max="1" hidden></progress>
+        <p id="send-status" class="muted" role="status" hidden></p>
       </form>
       <section class="subsection incoming">
         <h2>Входящие</h2>
@@ -102,10 +105,11 @@
         <label class="check"><input id="discovery" type="checkbox"> Поиск локальных компьютеров</label>
         <label class="check"><input id="autostart" type="checkbox"> Запускать сервер при входе в Windows</label>
         <div class="actions">
-          <button class="primary">Сохранить</button>
+          <button type="button" class="primary" id="save-settings">Сохранить</button>
           <button type="button" id="peer-address" hidden>Обновить адрес ведущего ПК</button>
           <button type="button" id="leave" hidden>Отключиться от ведущего ПК</button>
         </div>
+        <p id="settings-status" class="muted" role="status" hidden></p>
       </form>
       <section class="subsection" id="certificate-settings">
         <h2>Сертификат</h2>

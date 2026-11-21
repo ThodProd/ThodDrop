@@ -36,6 +36,15 @@ pub fn routes() -> Router<App> {
         "/icon-192.png" => "icon-192.png", "image/png";
         "/icon-512.png" => "icon-512.png", "image/png";
     }
+    .route(
+        "/join/{code}",
+        get(|| async {
+            asset(
+                "text/html; charset=utf-8",
+                include_bytes!("../web/phone.html"),
+            )
+        }),
+    )
     .merge(certificate_routes())
 }
 

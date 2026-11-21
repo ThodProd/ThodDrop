@@ -40,6 +40,7 @@ pub struct Server {
     pub local_addr: SocketAddr,
     pub jobs: Mutex<HashMap<Uuid, Job>>,
     pub dialogs: Mutex<HashMap<Uuid, DialogJob>>,
+    pub attachments: Mutex<HashMap<Uuid, crate::desktop::Attachment>>,
     pub candidates: Mutex<HashMap<String, Candidate>>,
     pub rescan: tokio::sync::Notify,
     pub certificate_url: Mutex<Option<String>>,
@@ -60,6 +61,7 @@ pub struct Database {
     pub pc_code: Option<crate::short_code::Pending>,
     pub network_error: Option<String>,
     pub peer_error: Option<String>,
+    pub peer_roster: Option<Value>,
 }
 
 #[derive(Clone, Serialize)]
@@ -163,6 +165,7 @@ impl Server {
             pc_code: None,
             network_error: None,
             peer_error: None,
+            peer_roster: None,
         };
         let (notifications, receiver) = tokio::sync::mpsc::channel(128);
         tokio::spawn(win::notifications(receiver));
@@ -175,6 +178,7 @@ impl Server {
             local_addr,
             jobs: Mutex::default(),
             dialogs: Mutex::default(),
+            attachments: Mutex::default(),
             candidates: Mutex::default(),
             rescan: tokio::sync::Notify::new(),
             certificate_url: Mutex::default(),

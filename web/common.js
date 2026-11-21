@@ -4,6 +4,7 @@ const icons = {
   pc: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
   phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
   attach: '<path d="m9 13 5-5a2 2 0 0 1 3 3l-7 7a4 4 0 0 1-6-6l8-8a5 5 0 0 1 7 7l-8 8"/>',
+  file: '<path d="M6 3h8l4 4v14H6zM14 3v5h4M9 13h6m-6 4h6"/>',
   send: '<path d="m22 2-7 20-4-9-9-4 20-7ZM22 2 11 13"/>',
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9H3Z"/>',
@@ -85,7 +86,12 @@ function showAttachments(files, remove) {
   list.hidden = !files.length;
   files.forEach((file, index) => {
     const row = el('li');
-    row.append(el('span', '', file.name), button('Убрать файл', () => remove(index), 'remove', true));
+    const mark = el('span', 'attachment-icon');
+    mark.append(icon(imageFile(file.name) ? 'photo' : 'file'));
+    const information = el('div', 'attachment-info');
+    information.append(el('strong', '', file.name));
+    if (typeof file.size === 'number') information.append(el('small', '', size(file.size)));
+    row.append(mark, information, button('Убрать файл', () => remove(index), 'remove', true));
     list.append(row);
   });
 }

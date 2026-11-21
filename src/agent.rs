@@ -64,11 +64,11 @@ pub async fn run(root: PathBuf) -> Result<()> {
     if let Some(discovery) = &discovery {
         tokio::spawn(browse(app.clone(), discovery.clone()));
     }
-    let task = if let Some(upstream) = config.upstream {
-        tokio::spawn(sync(app.clone(), upstream))
-    } else {
-        tokio::spawn(serve_lan(app.clone(), config, discovery.clone()))
-    };
+    let mut tasks = tokio::task::JoinSet::new();
+    if let Some(upstream) = config.upstream {
+        tasks.spawn(sync(app.clone(), upstream));
+    }
+    tasks.spawn(serve_lan(app.clone(), discovery.clone()));
     let mut local = tokio::spawn(axum::serve(socket, server::local(app.clone())).into_future());
     let result = tokio::select! {
         result = &mut local => result?.map_err(anyhow::Error::from),
@@ -76,7 +76,7 @@ pub async fn run(root: PathBuf) -> Result<()> {
         signal = tokio::signal::ctrl_c() => signal.map_err(anyhow::Error::from),
     };
     local.abort();
-    task.abort();
+    tasks.shutdown().await;
     if let Some(discovery) = discovery
         && let Ok(receiver) = discovery.shutdown()
     {
@@ -90,26 +90,54 @@ pub async fn run(root: PathBuf) -> Result<()> {
     result
 }
 
-async fn serve_lan(app: App, mut config: Config, discovery: Option<ServiceDaemon>) {
+async fn serve_lan(app: App, discovery: Option<ServiceDaemon>) {
     loop {
-        if config.address.is_none()
-            && let Some(ip) = net::default_address()
-        {
-            config.address = Some(ip);
-            if let Err(err) = app.save_config(&mut app.db.lock().unwrap(), config.clone()) {
-                eprintln!("Адрес сервера: {err}");
+        let mut config = {
+            let mut db = app.db.lock().unwrap();
+            let mut config = db.config.clone();
+            if config.address.is_none()
+                && let Some(ip) = net::default_address()
+            {
+                config.address = Some(ip);
+                if let Err(err) = app.save_config(&mut db, config.clone()) {
+                    eprintln!("Адрес сервера: {err}");
+                }
             }
-        }
-        if let Err(error) = listen(&app, &config, discovery.as_ref()).await {
+            config
+        };
+        if let Err(error) = listen(&app, &mut config, discovery.as_ref()).await {
             app.db.lock().unwrap().network_error = Some(format!("{error}"));
             tokio::time::sleep(sleep()).await;
         }
     }
 }
 
-async fn listen(app: &App, config: &Config, discovery: Option<&ServiceDaemon>) -> Result<()> {
+async fn listen(app: &App, config: &mut Config, discovery: Option<&ServiceDaemon>) -> Result<()> {
     let ip = config.address.context("Локальная сеть пока недоступна.")?;
-    let socket = net::lan_listener(ip, config.port)?;
+    let socket = match net::lan_listener(ip, config.port) {
+        Ok(socket) => socket,
+        Err(error)
+            if config.port == model::PORT
+                && error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::AddrInUse) =>
+        {
+            let mut db = app.db.lock().unwrap();
+            if !db.devices.is_empty()
+                || db.config.port != config.port
+                || db.config.address != config.address
+            {
+                return Err(error);
+            }
+            // A fresh local network can use an available port without invalidating phone sessions.
+            let socket = net::lan_listener(ip, 0)?;
+            *config = db.config.clone();
+            config.port = socket.local_addr()?.port();
+            app.save_config(&mut db, config.clone())?;
+            socket
+        }
+        Err(error) => return Err(error),
+    };
     let tls = app.ca.tls(ip).await?;
     let service = axum_server::from_tcp_rustls(socket, tls.clone())?;
     let bootstrap = config
@@ -204,10 +232,7 @@ async fn browse(app: App, discovery: ServiceDaemon) {
             },
             _ = app.rescan.notified() => {
                 match discovery.browse(net::SERVICE) {
-                    Ok(next) => {
-                        app.candidates.lock().unwrap().clear();
-                        events = next;
-                    }
+                    Ok(next) => events = next,
                     Err(err) => eprintln!("Поиск компьютеров: {err}"),
                 }
                 continue;
@@ -275,7 +300,7 @@ async fn sync(app: App, upstream: Upstream) {
         let client = client.clone();
         async move {
             loop {
-                let message = match net::peer_request(
+                let (roster, message) = match net::peer_request(
                     &client,
                     &upstream,
                     reqwest::Method::POST,
@@ -285,13 +310,31 @@ async fn sync(app: App, upstream: Upstream) {
                 .send()
                 .await
                 {
-                    Ok(reply) if reply.status().is_success() => None,
+                    Ok(reply) if reply.status().is_success() => match reply.json().await {
+                        Ok(roster) => (Some(roster), None),
+                        Err(_) => (None, Some("Не удалось прочитать список устройств.".into())),
+                    },
                     Ok(reply) if reply.status() == reqwest::StatusCode::UNAUTHORIZED => {
-                        Some("Доступ отозван на ведущем компьютере.".into())
+                        (None, Some("Доступ отозван на ведущем компьютере.".into()))
                     }
-                    _ => Some("Ведущий компьютер сейчас недоступен.".into()),
+                    _ => (None, Some("Ведущий компьютер сейчас недоступен.".into())),
                 };
-                app.db.lock().unwrap().peer_error = message;
+                let rename = {
+                    let mut db = app.db.lock().unwrap();
+                    if let Some(roster) = roster {
+                        db.peer_roster = Some(roster);
+                    }
+                    let rename = if message.is_none() && db.config.rename_pending {
+                        Some(db.config.name.clone())
+                    } else {
+                        None
+                    };
+                    db.peer_error = message;
+                    rename
+                };
+                if let Some(name) = rename {
+                    sync_name(&app, &upstream, &client, name).await;
+                }
                 tokio::time::sleep(sleep()).await;
             }
         }
@@ -308,6 +351,24 @@ async fn sync(app: App, upstream: Upstream) {
             break;
         }
         tokio::time::sleep(sleep()).await;
+    }
+}
+
+async fn sync_name(app: &App, upstream: &Upstream, client: &reqwest::Client, name: String) {
+    let result = net::peer_request(client, upstream, reqwest::Method::POST, "/api/name")
+        .timeout(Duration::from_secs(4))
+        .json(&serde_json::json!({"name":name}))
+        .send()
+        .await;
+    if result.is_ok_and(|response| response.status().is_success()) {
+        let mut db = app.db.lock().unwrap();
+        if db.config.name == name && db.config.rename_pending {
+            let mut config = db.config.clone();
+            config.rename_pending = false;
+            if let Err(error) = app.save_config(&mut db, config) {
+                eprintln!("Имя компьютера: {error}");
+            }
+        }
     }
 }
 
