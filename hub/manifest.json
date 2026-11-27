@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "hubApi": 1,
   "id": "thoddrop",
-  "version": "2.0.8",
+  "version": "2.0.9",
   "primaryLanguage": "Rust",
   "platform": "win-x64",
   "mode": "embedded",
