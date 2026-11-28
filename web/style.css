@@ -19,6 +19,8 @@ nav button[aria-selected=true]{color:var(--accent);background:var(--selected)}
 .tag.online{color:var(--green)}
 button,.link-button,.file-button{font:inherit;color:inherit;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg);padding:6px 11px;text-decoration:none;transition:background 150ms,border-color 150ms;white-space:normal}
 button:hover:not(:disabled),.link-button:hover,.file-button:hover{background:var(--surface);border-color:var(--muted)}
+#connection{color:var(--muted);font-size:12px;white-space:nowrap}
+#connection.online{color:var(--green)}
 button:disabled{cursor:default;opacity:.55}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent);font-weight:600}
 button.primary:hover:not(:disabled){filter:brightness(.94);background:var(--accent);border-color:var(--accent)}
@@ -46,7 +48,10 @@ fieldset{border:1px solid var(--line);border-radius:12px;margin:8px 0;padding:12
 fieldset .muted{margin:0}
 .fields{display:grid;grid-template-columns:minmax(0,2fr) minmax(84px,1fr);gap:10px}
 .fields input,#prompt-value{margin-top:5px}
-#config{max-width:650px}
+#config,#server-controls{max-width:650px}
+#server-controls{margin-bottom:20px}
+#server-controls p{margin:0;overflow-wrap:anywhere}
+#server-controls p.error{color:var(--red)}
 .targets{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:2px}
 .recipient{border-radius:20px;max-width:100%;overflow-wrap:anywhere}
 .recipient[aria-pressed=true]{background:var(--selected);color:var(--accent);border-color:var(--accent)}

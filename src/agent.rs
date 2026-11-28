@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde::{Deserialize, Serialize};
 use std::{
+    fs::File,
     net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Duration,
 };
 use tokio::{io::AsyncWriteExt, sync::watch};
@@ -28,18 +29,9 @@ fn sleep() -> Duration {
 
 pub async fn run(root: PathBuf) -> Result<()> {
     let runtime = root.join("runtime");
-    std::fs::create_dir_all(&runtime)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(runtime.join("server.lock"))?;
-    match lock.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => return Ok(()),
-        Err(std::fs::TryLockError::Error(err)) => return Err(err.into()),
-    }
+    let Some(lock) = lock_server(&root)? else {
+        return Ok(());
+    };
     let socket = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let local_addr = socket.local_addr()?;
     let (tx, mut rx) = watch::channel(false);
@@ -88,6 +80,49 @@ pub async fn run(root: PathBuf) -> Result<()> {
         win::spawn_daemon(&root)?;
     }
     result
+}
+
+fn lock_server(root: &Path) -> Result<Option<File>> {
+    let runtime = root.join("runtime");
+    std::fs::create_dir_all(&runtime)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(runtime.join("server.lock"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    }
+}
+
+pub async fn set_autostart(root: &Path, client: &reqwest::Client, enabled: bool) -> Result<()> {
+    for _ in 0..30 {
+        if let Some(endpoint) = try_endpoint(root, client).await {
+            let response = client
+                .post(format!(
+                    "http://127.0.0.1:{}/local/autostart",
+                    endpoint.port
+                ))
+                .bearer_auth(endpoint.token)
+                .json(&enabled)
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await;
+            if let Ok(response) = response {
+                desktop::result(response).await?;
+                return Ok(());
+            }
+        }
+        if let Some(_lock) = lock_server(root)? {
+            let mut config = model::read(&root.join("network-v2.json"))?;
+            return win::save_autostart(root, &mut config, enabled);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("Сервер занят. Повторите изменение автозапуска.")
 }
 
 async fn serve_lan(app: App, discovery: Option<ServiceDaemon>) {

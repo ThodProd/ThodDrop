@@ -17,7 +17,7 @@
       <button id="tab-connect" aria-controls="connect" role="tab" aria-selected="false" data-tab="connect">Подключение</button>
       <button id="tab-settings" aria-controls="settings" role="tab" aria-selected="false" data-tab="settings">Настройки</button>
     </nav>
-    <span id="connection" class="tag" aria-live="polite">Запуск…</span>
+    <button type="button" id="connection" class="tag" aria-controls="server-controls" title="Открыть настройки сервера"><span id="connection-label" role="status">Запуск…</span></button>
   </header>
   <main>
     <div id="notice" class="notice" role="status" hidden></div>
@@ -89,6 +89,18 @@
     </section>
     <section id="settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
       <h1>Настройки</h1>
+      <fieldset id="server-controls" tabindex="-1">
+        <legend>Сервер ThodDrop</legend>
+        <p id="server-state" role="status">Проверка фонового сервера…</p>
+        <p id="server-detail" class="muted" hidden></p>
+        <div class="actions">
+          <button type="button" id="start-server" disabled>Запустить сервер</button>
+          <button type="button" id="peer-address" hidden>Обновить адрес ведущего ПК</button>
+        </div>
+        <p id="server-start-status" class="muted" role="status" hidden></p>
+        <label class="check"><input id="autostart" type="checkbox" disabled> Запускать сервер при входе в Windows</label>
+        <p id="autostart-status" class="muted" role="status" hidden></p>
+      </fieldset>
       <form id="config">
         <label for="pc-name">Имя этого компьютера</label>
         <input id="pc-name" maxlength="64" required>
@@ -102,13 +114,11 @@
           <p class="muted">Адрес и порт сохраняются. Чтобы роутер не сменил IP, закрепите его для этого компьютера в настройках DHCP.</p>
         </fieldset>
         <label class="check"><input id="discovery" type="checkbox"> Поиск локальных компьютеров</label>
-        <label class="check"><input id="autostart" type="checkbox"> Запускать сервер при входе в Windows</label>
         <label class="check"><input id="phone-http" type="checkbox"> Открывать ThodDrop на телефоне без сертификата</label>
         <p class="muted">В этом режиме телефон подключается по локальному HTTP. Используйте его в доверенной Wi-Fi сети. После включения отсканируйте новый QR-код.</p>
         <p class="endpoint" id="phone-http-url" hidden></p>
         <div class="actions">
           <button type="button" class="primary" id="save-settings">Сохранить</button>
-          <button type="button" id="peer-address" hidden>Обновить адрес ведущего ПК</button>
           <button type="button" id="leave" hidden>Забыть ведущий ПК</button>
         </div>
         <p id="settings-status" class="muted" role="status" hidden></p>

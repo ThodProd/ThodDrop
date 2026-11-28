@@ -27,6 +27,7 @@ use uuid::Uuid;
 pub fn routes() -> Router<App> {
     Router::new()
         .route("/local/status", get(status))
+        .route("/local/autostart", post(autostart))
         .route("/local/config", post(configure))
         .route("/local/free-port", post(free_port))
         .route("/local/invite", post(invite))
@@ -109,13 +110,18 @@ async fn scan(State(app): State<App>) -> Api<Json<Value>> {
     Ok(Json(json!(true)))
 }
 
+async fn autostart(State(app): State<App>, Json(enabled): Json<bool>) -> Api<Json<Value>> {
+    let mut db = app.db.lock().unwrap();
+    win::save_autostart(&app.root, &mut db.config, enabled)?;
+    Ok(Json(json!(enabled)))
+}
+
 #[derive(Deserialize)]
 struct Settings {
     name: String,
     address: Option<Ipv4Addr>,
     port: u16,
     discovery: bool,
-    autostart: bool,
     phone_http: Option<bool>,
 }
 async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Api<Json<Value>> {
@@ -138,7 +144,6 @@ async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Ap
         )?;
     }
     config.discovery = settings.discovery;
-    config.autostart = settings.autostart;
     if let Some(phone_http) = settings.phone_http {
         config.phone_http = phone_http;
     }
@@ -147,13 +152,7 @@ async fn configure(State(app): State<App>, Json(settings): Json<Settings>) -> Ap
         || config.address != db.config.address
         || config.discovery != db.config.discovery
         || config.phone_http != db.config.phone_http;
-    if config.autostart != db.config.autostart {
-        win::autostart(&app.root, config.autostart)?;
-    }
-    if let Err(err) = app.save_config(&mut db, config) {
-        let _ = win::autostart(&app.root, db.config.autostart);
-        return Err(err.into());
-    }
+    app.save_config(&mut db, config)?;
     if restart {
         restart_later(app.clone());
     }

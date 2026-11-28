@@ -68,6 +68,7 @@ pub fn local_client() -> reqwest::Client {
 
 async fn rpc(root: &Path) -> Result<()> {
     let client = local_client();
+    let mut auto_start = true;
     let mut input = BufReader::new(tokio::io::stdin()).lines();
     let mut output = tokio::io::stdout();
     while let Some(line) = input.next_line().await? {
@@ -75,13 +76,12 @@ async fn rpc(root: &Path) -> Result<()> {
             continue;
         };
         let id = request["id"].clone();
-        let result = dispatch(
-            root,
-            &client,
-            request["method"].as_str().unwrap_or(""),
-            &request["params"],
-        )
-        .await;
+        let method = request["method"].as_str().unwrap_or("");
+        let start = method == "startServer" || (method == "status" && auto_start);
+        if start {
+            auto_start = false;
+        }
+        let result = dispatch(root, &client, method, &request["params"], start).await;
         let response = match result {
             Ok(value) => json!({"jsonrpc":"2.0","id":id,"result":value}),
             Err(error) => {
@@ -100,7 +100,22 @@ async fn dispatch(
     client: &reqwest::Client,
     method: &str,
     params: &Value,
+    start: bool,
 ) -> Result<Value> {
+    if method == "serverAutostart" {
+        if !params.is_null() {
+            let enabled = params["enabled"]
+                .as_bool()
+                .context("Укажите состояние автозапуска.")?;
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                agent::set_autostart(root, client, enabled),
+            )
+            .await
+            .context("Не удалось подтвердить изменение автозапуска. Повторите попытку.")??;
+        }
+        return Ok(json!(win::autostart_enabled()?));
+    }
     let id = || -> Result<uuid::Uuid> {
         Ok(params["id"]
             .as_str()
@@ -108,7 +123,7 @@ async fn dispatch(
             .parse()?)
     };
     let (post, path) = match method {
-        "status" => (false, "/local/status".into()),
+        "status" | "startServer" => (false, "/local/status".into()),
         "config" => (true, "/local/config".into()),
         "freePort" => (true, "/local/free-port".into()),
         "invite" => (true, "/local/invite".into()),
@@ -139,7 +154,13 @@ async fn dispatch(
         "dialogJob" => (false, format!("/local/dialog/{}", id()?)),
         _ => bail!("Неизвестное действие."),
     };
-    let endpoint = agent::endpoint(root, client).await?;
+    let endpoint = if method == "status" && !start {
+        agent::try_endpoint(root, client)
+            .await
+            .context("Фоновый сервер недоступен. Нажмите «Запустить сервер».")?
+    } else {
+        agent::endpoint(root, client).await?
+    };
     let address = format!("http://127.0.0.1:{}{path}", endpoint.port);
     let request = if post {
         client.post(address).json(params)

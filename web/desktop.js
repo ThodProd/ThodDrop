@@ -23,6 +23,10 @@ let sending = false;
 let dirty = false;
 let saving = false;
 let inboxVersion;
+let startingServer = false;
+let serverReachable = false;
+let autostartEnabled;
+let autostartLoading = false;
 
 function switchTab(id) {
   tab = id;
@@ -31,6 +35,7 @@ function switchTab(id) {
     button.setAttribute('aria-selected', active);
     $(button.dataset.tab).hidden = !active;
   }
+  if (id === 'settings') void updateAutostart();
   refresh();
 }
 document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => switchTab(button.dataset.tab)));
@@ -42,6 +47,10 @@ document.querySelector('nav').addEventListener('keydown', event => {
   switchTab(buttons[next].dataset.tab);
 });
 $('to-transfers').onclick = () => switchTab('transfers');
+$('connection').onclick = () => {
+  switchTab('settings');
+  $('server-controls').focus();
+};
 
 function ask({title, body, field, value, file, action = 'Сохранить', danger = false}) {
   const dialog = $('prompt');
@@ -276,12 +285,68 @@ function renderRoster() {
   }
   $('to-transfers').hidden = !selected.size;
 }
-function renderConnection() {
+function renderServer(error) {
   const status = $('connection');
-  const error = view.joined ? view.peerError : view.networkError;
-  status.textContent = error ? 'Нет связи' : view.joined ? 'В сети' : view.url ? 'Сервер запущен' : 'Запуск…';
-  status.title = error || '';
-  status.classList.toggle('online', !error && !!(view.url || view.joined));
+  const online = serverReachable && !view.networkError && !view.peerError && !!view.url;
+  $('connection-label').textContent = startingServer ? 'Запуск…'
+    : !serverReachable || view.networkError || view.peerError ? 'Нет связи'
+    : view.joined ? 'В сети' : view.url ? 'Сервер запущен' : 'Ожидание сети';
+  status.classList.toggle('online', online && !startingServer);
+  $('start-server').disabled = startingServer || serverReachable;
+  $('server-state').textContent = startingServer ? 'Запуск фонового сервера…'
+    : serverReachable ? 'Фоновый сервер запущен.' : 'Фоновый сервер недоступен.';
+  const detail = $('server-detail');
+  detail.textContent = startingServer ? '' : !serverReachable ? error?.message || ''
+    : view.networkError ? 'Локальная сеть · ' + view.networkError
+    : view.peerError ? 'Ведущий ПК недоступен · ' + (view.peerName || view.joined)
+    : !view.url ? 'Ожидание локального адреса.' : '';
+  detail.hidden = !detail.textContent;
+  $('peer-address').hidden = !serverReachable || !view.joined;
+}
+
+async function updateAutostart(enabled) {
+  if (autostartLoading) return;
+  const checkbox = $('autostart');
+  const status = $('autostart-status');
+  autostartLoading = checkbox.disabled = true;
+  status.hidden = true;
+  status.classList.remove('error');
+  try {
+    autostartEnabled = await call('serverAutostart', enabled === undefined ? null : {enabled});
+    if (enabled !== undefined) {
+      status.textContent = autostartEnabled ? 'Автозапуск включён.' : 'Автозапуск выключен.';
+      status.hidden = false;
+    }
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+    status.hidden = false;
+  } finally {
+    checkbox.checked = autostartEnabled === true;
+    checkbox.disabled = autostartEnabled === undefined;
+    autostartLoading = false;
+  }
+}
+$('autostart').onchange = event => void updateAutostart(event.target.checked);
+$('start-server').onclick = async () => {
+  if (startingServer || serverReachable) return;
+  startingServer = true;
+  const status = $('server-start-status');
+  status.hidden = true;
+  renderServer();
+  try {
+    acceptStatus(await call('startServer'), true);
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+    status.hidden = false;
+  } finally {
+    startingServer = false;
+    renderServer();
+  }
+};
+
+function renderConnection() {
   $('address-display').textContent = view.networkError || view.url || 'Определение локального адреса…';
   $('peer-status').hidden = !view.joined;
   $('peer-status').textContent = view.joined
@@ -310,7 +375,6 @@ function renderConnection() {
       : button('Подключиться', () => join(candidate)));
     found.append(row);
   }
-  $('peer-address').hidden = !view.joined;
   $('leave').hidden = !view.joined;
   $('phone-http-url').hidden = !view.phoneHttpUrl;
   $('phone-http-url').textContent = view.phoneHttpUrl || '';
@@ -319,7 +383,6 @@ function renderConnection() {
     $('address').value = view.address || '';
     $('port').value = view.port;
     $('discovery').checked = view.discovery;
-    $('autostart').checked = view.autostart;
     $('phone-http').checked = view.phoneHttp;
   }
 }
@@ -339,7 +402,7 @@ async function saveSettings() {
   status.textContent = 'Сохранение…';
   try {
     const result = await call('config', {name:$('pc-name').value, address:$('address').value.trim() || null,
-      port:$('port').valueAsNumber, discovery:$('discovery').checked, autostart:$('autostart').checked, phone_http:$('phone-http').checked});
+      port:$('port').valueAsNumber, discovery:$('discovery').checked, phone_http:$('phone-http').checked});
     dirty = false;
     status.textContent = result.nameSyncPending
       ? 'Настройки сохранены. Имя на ведущем ПК обновится при синхронизации.'
@@ -564,31 +627,42 @@ $('more').onclick = async () => {
   try { await loadInbox(inboxNext); } catch (error) { failure(error); }
   finally { loading = false; }
 };
+function acceptStatus(next, force) {
+  if (view?.roster && next.roster) {
+    const previous = new Set(view.roster.devices.map(device => device.id));
+    const added = next.roster.devices.filter(device => !previous.has(device.id));
+    if (invitation && added.some(device => device.kind === 'phone')) hideInvite();
+  }
+  if (view?.nameSyncPending && !next.nameSyncPending && !next.peerError && !dirty) {
+    $('settings-status').textContent = 'Имя обновлено на ведущем ПК.';
+  }
+  const changed = !serverReachable || JSON.stringify(next) !== JSON.stringify(view);
+  serverReachable = true;
+  view = next;
+  $('server-start-status').hidden = true;
+  renderServer();
+  if (changed || force) { renderConnection(); renderRoster(); }
+  if (next.url && !next.networkError && !$('pc-invitation').hidden && (!next.pcCodeActive || pcExpiration <= Date.now())) {
+    void createPcCode();
+  }
+  if (tab === 'settings') void loadCertificateSetup();
+}
 async function refresh(force = false) {
-  if (loading || (document.hidden && !force)) return;
+  if (loading || startingServer || (document.hidden && !force)) return;
   loading = true;
   try {
-    const next = await call('status');
-    if (view?.roster && next.roster) {
-      const previous = new Set(view.roster.devices.map(device => device.id));
-      const added = next.roster.devices.filter(device => !previous.has(device.id));
-      if (invitation && added.some(device => device.kind === 'phone')) hideInvite();
+    let next;
+    try {
+      next = await call('status');
+    } catch (error) {
+      serverReachable = false;
+      renderServer(error);
+      return;
     }
-    if (view?.nameSyncPending && !next.nameSyncPending && !next.peerError && !dirty) {
-      $('settings-status').textContent = 'Имя обновлено на ведущем ПК.';
-    }
-    const changed = JSON.stringify(next) !== JSON.stringify(view);
-    view = next;
-    if (changed || force) { renderConnection(); renderRoster(); }
-    if (next.url && !next.networkError && !$('pc-invitation').hidden && (!next.pcCodeActive || pcExpiration <= Date.now())) {
-      void createPcCode();
-    }
-    if (tab === 'settings') void loadCertificateSetup();
+    acceptStatus(next, force);
     if (tab === 'transfers') await loadInbox();
   } catch (error) {
-    $('connection').textContent = 'Нет связи';
-    $('connection').classList.remove('online');
-    if (!view || force) failure(error);
+    if (force) failure(error);
   } finally { loading = false; }
 }
 refresh();

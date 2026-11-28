@@ -112,6 +112,32 @@ pub fn autostart(root: &Path, enabled: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+pub fn autostart_enabled() -> Result<bool> {
+    use winreg::{RegKey, enums::HKEY_CURRENT_USER};
+    let key = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run")?;
+    match key.get_value::<String, _>("ThodDrop.Rust") {
+        Ok(command) => Ok(!command.is_empty()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub fn save_autostart(root: &Path, config: &mut crate::model::Config, enabled: bool) -> Result<()> {
+    autostart(root, enabled)?;
+    if config.autostart != enabled {
+        let mut updated = config.clone();
+        updated.autostart = enabled;
+        if let Err(error) = crate::model::write(&root.join("network-v2.json"), &updated) {
+            autostart(root, config.autostart).context("Не удалось восстановить автозапуск.")?;
+            return Err(error);
+        }
+        *config = updated;
+    }
+    Ok(())
+}
+
 pub fn spawn_daemon(root: &Path) -> Result<()> {
     let log = std::fs::OpenOptions::new()
         .create(true)

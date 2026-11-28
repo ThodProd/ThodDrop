@@ -34,4 +34,4 @@ foreach ($asset in @('style.css', 'common.js', 'desktop.js', 'icon-192.png')) {
 Copy-Item -LiteralPath (Join-Path $root 'sdk/thodhub.js') -Destination $ui.FullName
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE'), (Join-Path $root 'NOTICE') -Destination $stage
 & $packageScript -PackageDirectory $stage -Repository 'ThodProd/ThodDrop' -OutputDirectory $OutputDirectory `
-    -Notes 'Уведомления о входящих передачах на телефоне по HTTPS. Зелёные и красные индикаторы устройств и короткая подсказка по добавлению ThodDrop на экран «Домой».'
+    -Notes 'Нажмите «Нет связи», чтобы открыть управление сервером. В настройках можно запустить фоновый сервер и включить его запуск при входе в Windows. Отдельно показана доступность ведущего ПК.'

@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'thoddrop-shell-2.0.9';
+const CACHE = 'thoddrop-shell-2.0.10';
 const SHELL = ['/', '/style.css', '/common.js', '/phone.js', '/apple-touch-icon.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
